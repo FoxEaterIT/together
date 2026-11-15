@@ -1,0 +1,10 @@
+data/
+dist/
+internal/web/dist/
+internal/web/node_modules/
+node_modules/
+.vite/
+*.db
+*.db-wal
+*.db-shm
+*.tsbuildinfo
