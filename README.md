@@ -7,6 +7,7 @@ It is deliberately small: no marketplace or plugins. Each project owns independe
 ## Contents
 
 - [How it is built](#how-it-is-built)
+- [Product tour](#product-tour)
 - [Feature tour](#feature-tour)
 - [Roles and access](#roles-and-access)
 - [Requirements](#requirements)
@@ -39,6 +40,56 @@ It is deliberately small: no marketplace or plugins. Each project owns independe
 - **Nothing is hard-deleted.** Projects, teams and items are archived with `archived_at`; history is append-only. A backup is a complete copy of the state.
 - **No external requests at runtime.** Fonts, icons and the logo are served by the binary. SMTP is the only optional outbound integration.
 - **Project-owned workflows.** Each project can own multiple independent flows and bind one to each task type. Standard kits are copied locally; changes never affect another project.
+
+## Product tour
+
+These screenshots come from a running Together instance populated with fictional demo work. They show the interface in both themes and trace a typical workflow from personal planning through project delivery, collaboration and administration.
+
+### My work and themes
+
+The personal workspace brings assignments from readable projects into one prioritized view, with due dates, workload summaries and quick filters. Together supports light and dark themes; the composite below places dark mode on the left and light mode on the right.
+
+![My work homepage in dark theme on the left and light theme on the right](docs/screenshots/my-work-dark-light.jpg)
+
+Separate captures: [Light theme](docs/screenshots/my-work-light.jpg) · [Dark theme](docs/screenshots/my-work-dark.jpg)
+
+### Projects and execution
+
+A project view makes ownership and delivery visible across Observer, Action, Micro and Bug work, with project-specific states, priorities, deadlines and assignees. Item detail keeps the description, collaboration, available actions and append-only change history together.
+
+![Website Refresh project work list with varied tasks, states, priorities and assignees](docs/screenshots/project-website-refresh.jpg)
+
+![Work item detail showing release acceptance criteria, transition history and shared assignees](docs/screenshots/item-detail.jpg)
+
+### Search, planning and reporting
+
+Search spans readable projects and indexes titles, descriptions and comments; calendar and reports provide complementary views of deadlines, state counts and open workload by person.
+
+![Cross-project search results with filters and matched work items](docs/screenshots/search.jpg)
+
+![November 2026 calendar with coordinated project deadlines](docs/screenshots/calendar.jpg)
+
+![Report with open work by workflow state and assignee](docs/screenshots/reports.jpg)
+
+### Collaboration and configuration
+
+Notifications collect assignments and mentions in one inbox. People and teams support installation-wide accounts and reusable project access, while automations apply ordered actions in response to work events.
+
+![Notification inbox with demo assignment and mention activity](docs/screenshots/notifications.jpg)
+
+![People administration with fictional demo accounts and role controls](docs/screenshots/people.jpg)
+
+![Reusable Northstar Product Delivery team](docs/screenshots/teams.jpg)
+
+![Enabled project automation rules for review planning and QA assignment](docs/screenshots/automations.jpg)
+
+### Project workflows and operations
+
+Each project owns its workflow configuration and task-type bindings, independent from other projects. The admin screen brings SMTP status, consistent SQLite backup, search-index maintenance and two-factor policy together; no credentials are exposed in the screenshot.
+
+![Website Refresh project settings, workflow ownership, task-type bindings and archive controls](docs/screenshots/project-workflow.jpg)
+
+![Administration screen with SMTP status, backup, search index and two-factor policy](docs/screenshots/admin.jpg)
 
 ## Feature tour
 
