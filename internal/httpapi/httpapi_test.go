@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -392,6 +394,32 @@ func TestSetupStoresChosenLocale(t *testing.T) {
 	}
 	if profile.Locale != "es" {
 		t.Fatalf("stored locale = %q, want es", profile.Locale)
+	}
+}
+
+func TestSetupPersistsInitialSMTPOnly(t *testing.T) {
+	s := testServer(t)
+	path := filepath.Join(t.TempDir(), "config.ini")
+	s.SetConfigPath(path)
+	body := `{"name":"Admin","email":"admin@example.test","password":"password-strong","locale":"it","smtp":{"host":"mail.example.test","port":587,"user":"mailer","password":"smtp-secret","from":"noreply@example.test","tls":true}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/setup", strings.NewReader(body))
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"smtp_host=mail.example.test", "smtp_port=587", "smtp_from=noreply@example.test", "smtp_tls=true", "smtp_pass_enc="} {
+		if !strings.Contains(text, want) {
+			t.Errorf("config missing %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "smtp-secret") {
+		t.Fatal("SMTP password was written in clear text")
 	}
 }
 

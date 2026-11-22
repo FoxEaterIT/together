@@ -21,6 +21,34 @@ type smtpBody struct {
 	TLS      bool    `json:"tls"`
 }
 
+// initialSMTP validates optional SMTP configuration and seals its password before persistence.
+func (s *Server) initialSMTP(body smtpBody) (email.Config, map[string]string, bool) {
+	host := strings.TrimSpace(body.Host)
+	from := strings.TrimSpace(body.From)
+	user := strings.TrimSpace(body.User)
+	if host == "" && from == "" && body.Port == 0 && user == "" && (body.Password == nil || *body.Password == "") {
+		return email.Config{}, nil, true
+	}
+	if host == "" || from == "" || !strings.Contains(from, "@") || body.Port < 1 || body.Port > 65535 {
+		return email.Config{}, nil, false
+	}
+	cfg := email.Config{Host: host, Port: body.Port, User: user, From: from, TLS: body.TLS}
+	updates := map[string]string{
+		"smtp_host": host, "smtp_port": strconv.Itoa(body.Port), "smtp_user": user,
+		"smtp_from": from, "smtp_tls": strconv.FormatBool(body.TLS),
+	}
+	if body.Password != nil && *body.Password != "" {
+		sealed, err := s.seal(*body.Password)
+		if err != nil {
+			return email.Config{}, nil, false
+		}
+		cfg.Pass = *body.Password
+		updates["smtp_pass_enc"] = sealed
+		updates["smtp_pass"] = ""
+	}
+	return cfg, updates, true
+}
+
 type smtpView struct {
 	Host        string `json:"host"`
 	Port        int    `json:"port"`

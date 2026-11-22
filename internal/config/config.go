@@ -53,9 +53,13 @@ func Load(path string) (Config, error) {
 			values[strings.ToLower(key)] = value
 		}
 	}
+	defaultDataDir, err := defaultDataDir()
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve user data directory: %w", err)
+	}
 	cfg := Config{
 		Addr:           pick(values, "addr", ":8080"),
-		DataDir:        pick(values, "data_dir", "data"),
+		DataDir:        pick(values, "data_dir", defaultDataDir),
 		Locale:         pick(values, "locale", "en"),
 		SMTPHost:       strings.TrimSpace(values["smtp_host"]),
 		SMTPUser:       values["smtp_user"],
@@ -66,7 +70,6 @@ func Load(path string) (Config, error) {
 		TLSKey:         strings.TrimSpace(values["tls_key"]),
 		TLSRedirect:    strings.TrimSpace(values["tls_redirect"]),
 	}
-	var err error
 	if cfg.SecureCookies, err = boolValue(values, "secure_cookies"); err != nil {
 		return Config{}, err
 	}
@@ -112,6 +115,14 @@ func Load(path string) (Config, error) {
 	}
 	return cfg, nil
 }
+func defaultDataDir() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "Together"), nil
+}
+
 func (c Config) SMTPConfigured() bool { return c.SMTPHost != "" && c.SMTPPort > 0 && c.SMTPFrom != "" }
 
 // boolValue reads a true/false configuration flag. An empty value means false.

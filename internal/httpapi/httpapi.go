@@ -15,12 +15,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"jiralike/internal/auth"
 	"jiralike/internal/automations"
+	"jiralike/internal/config"
 	"jiralike/internal/email"
 	"jiralike/internal/items"
 	"jiralike/internal/notifications"
@@ -341,6 +343,15 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ready": true})
 }
 
+func smtpEnvironmentConfigured() bool {
+	for _, key := range []string{"SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM", "SMTP_TLS"} {
+		if _, ok := os.LookupEnv(key); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
 	done, err := s.auth.SetupCompleted()
 	if err != nil {
@@ -352,10 +363,11 @@ func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setupCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name     string `json:"name"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		Locale   string `json:"locale"`
+		Name     string    `json:"name"`
+		Email    string    `json:"email"`
+		Password string    `json:"password"`
+		Locale   string    `json:"locale"`
+		SMTP     *smtpBody `json:"smtp"`
 	}
 	if err := s.decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
@@ -364,6 +376,27 @@ func (s *Server) setupCreate(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(body.Name) == "" || !strings.Contains(body.Email, "@") || len(body.Password) < 8 {
 		writeError(w, http.StatusBadRequest, "name, email and a password of 8 characters are required")
 		return
+	}
+	locale := normalizeLocale(body.Locale)
+	var initialMail *email.Config
+	var configUpdates map[string]string
+	if body.SMTP != nil {
+		mailCfg, updates, ok := s.initialSMTP(*body.SMTP)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid SMTP settings")
+			return
+		}
+		if updates != nil {
+			initialMail = &mailCfg
+			configUpdates = updates
+		}
+	}
+	if s.configPath != "" && configUpdates != nil {
+		if err := config.Save(s.configPath, configUpdates); err != nil {
+			log.Printf("save initial configuration: %v", err)
+			writeError(w, http.StatusInternalServerError, "initial configuration could not be saved")
+			return
+		}
 	}
 	user, _, err := s.auth.Setup(body.Name, body.Email, body.Password)
 	if errors.Is(err, auth.ErrAlreadySetup) {
@@ -378,12 +411,15 @@ func (s *Server) setupCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "setup failed")
 		return
 	}
-	if locale := normalizeLocale(body.Locale); locale != user.Locale {
+	if locale != user.Locale {
 		if err := s.auth.UpdateProfile(user.ID, user.Name, locale, 0); err != nil {
 			writeError(w, http.StatusInternalServerError, "setup failed")
 			return
 		}
 		user.Locale = locale
+	}
+	if initialMail != nil && !smtpEnvironmentConfigured() {
+		s.updateMailConfig(*initialMail)
 	}
 	if err := s.startSession(w, user.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "session failed")

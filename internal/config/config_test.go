@@ -15,7 +15,11 @@ func TestLoadDefaultsAndEnvironmentOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != ":8080" || cfg.Locale != "en" || cfg.DBPath != filepath.Join("data", "app.db") {
+	defaultDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Addr != ":8080" || cfg.Locale != "en" || cfg.DataDir != filepath.Join(defaultDir, "Together") || cfg.DBPath != filepath.Join(defaultDir, "Together", "app.db") {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	file := filepath.Join(t.TempDir(), "config.ini")

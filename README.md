@@ -92,7 +92,7 @@ go run ./cmd/server          # API and built UI on http://127.0.0.1:8080
 npm run dev                  # Vite on http://127.0.0.1:5173, proxies /api to :8080
 ```
 
-The Vite dev server serves `web/` with hot reload and proxies API calls to the Go process. A first run creates `data/app.db`, applies migrations and seeds the default states. Open the app, create the administrator and sign in.
+The Vite dev server serves `web/` with hot reload and proxies API calls to the Go process. A first run creates `app.db` in the platform user data directory (or the configured `data_dir`), applies migrations and seeds the default states. Open the app, create the administrator and sign in.
 
 Useful checks while developing:
 
@@ -153,18 +153,18 @@ The master artwork stays outside `web/public`, so only the resized copy is embed
 
 ## Configuration
 
-Configuration is read from `config.ini` in the working directory. Environment variables override the file. `CONFIG_PATH` points at a different ini file.
+Configuration is read from `config.ini` in the working directory. Environment variables override values in the file. `CONFIG_PATH` points at a different ini file. The first-run screen creates the administrator and can optionally save SMTP settings; address/port, TLS and cookie security are intentionally left to the site operator or system administrator.
 
 ```ini
 addr=:8080
-data_dir=data
+# data_dir defaults to the platform user application-data location
 locale=en
 secure_cookies=false
 # tls_auto=true
 # tls_cert=/etc/together/fullchain.pem
 # tls_key=/etc/together/privkey.pem
 # tls_redirect=:80
-# db_path=data/app.db
+# db_path=/path/to/Together/app.db
 # smtp_host=mail.example.test
 # smtp_port=587
 # smtp_user=
@@ -176,9 +176,9 @@ secure_cookies=false
 | ini key | environment | default | notes |
 |---|---|---|---|
 | `addr` | `ADDR` | `:8080` | Listen address. |
-| `data_dir` | `DATA_DIR` | `data` | Directory created at startup; also holds `secret.key` and, with `tls_auto`, the generated certificate. |
-| `db_path` | `DB_PATH` | `data_dir/app.db` | Explicit database path. |
-| `locale` | `LOCALE` | `en` | Accepted interface language: `en`, `it` or `es`. The web UI follows the browser language on first visit. |
+| `data_dir` | `DATA_DIR` | `%LOCALAPPDATA%/Together` on Windows; user config directory `/Together` elsewhere | Directory created at startup; holds the database, `secret.key` and, with `tls_auto`, the generated certificate. Operators can override it for managed deployments. |
+| `db_path` | `DB_PATH` | `data_dir/app.db` | Explicit database path; normally leave unset so it stays inside `data_dir`. |
+| `locale` | `LOCALE` | `en` | Server locale setting (`en`, `it` or `es`). The first-run choice is saved to the administrator profile, not to `config.ini`; the web UI follows browser/user preferences. |
 | `secure_cookies` | `SECURE_COOKIES` | `false` | Set `true` when HTTPS terminates at the proxy. Forced on when the binary serves TLS. |
 | `tls_auto` | `TLS_AUTO` | `false` | Serve HTTPS with a certificate generated in `data_dir`. The browser warns about a self-signed certificate, but the traffic is encrypted. |
 | `tls_cert` | `TLS_CERT` | – | PEM certificate chain. Must be set together with `tls_key`. |
@@ -187,30 +187,30 @@ secure_cookies=false
 | `smtp_host` | `SMTP_HOST` | – | Enables email when host, port and sender are set. |
 | `smtp_port` | `SMTP_PORT` | `0` | Required when `smtp_host` is set. |
 | `smtp_user` | `SMTP_USER` | – | Optional SMTP username. |
-| `smtp_pass_enc` | – | – | SMTP password sealed with `data/secret.key`. Written by the admin screen; never cleared text. |
+| `smtp_pass_enc` | – | – | SMTP password sealed with `secret.key` in `data_dir`. Written by first-run setup or the admin screen; never clear text. |
 | `smtp_pass` | `SMTP_PASS` | – | Only read to migrate an old clear-text password from the ini file; it is sealed on the next start and the key is removed. The environment variable keeps the value in memory and is never written. |
 | `smtp_from` | `SMTP_FROM` | – | Sender address. |
 | `smtp_tls` | `SMTP_TLS` | `false` | Use STARTTLS when true. |
 
-SMTP is optional and is not required to start. Admins can edit these values in the admin area; changes are written back to the ini file atomically and an empty password field keeps the stored one. The password itself is stored sealed, never in clear text.
+SMTP is optional and is not required to start. During first-run setup, an optional email section can save SMTP settings to the ini file; admins can also edit them later in the admin area. Updates are atomic and an empty password field keeps the stored one. Passwords are sealed with the installation key and never stored in clear text. Environment-provided SMTP values remain authoritative at runtime.
 
 ### Transport security
 
 The binary serves plain HTTP unless TLS is configured, so passwords and session cookies would travel readable on the network. Two options:
 
-- `tls_auto=true`: the server creates `data/tls-cert.pem` and `data/tls-key.pem` and serves HTTPS with HTTP/2. Good for a single machine or a trusted LAN; browsers show a self-signed warning.
+- `tls_auto=true`: the server creates `tls-cert.pem` and `tls-key.pem` in `data_dir` and serves HTTPS with HTTP/2. Good for a single machine or a trusted LAN; browsers show a self-signed warning.
 - `tls_cert` and `tls_key`: a real certificate, for example from Let's Encrypt, either served directly or copied from a proxy that no longer terminates TLS.
 
 A TLS-terminating proxy remains supported: forward to `addr`, keep the original `Host` header, and set `secure_cookies=true`. The binary adds `Strict-Transport-Security` whenever it serves TLS itself, marks the session cookie `Secure` automatically and refuses to start with an inconsistent TLS configuration.
 
 ### Secrets at rest
 
-Passwords are bcrypt hashes. Session tokens, personal API tokens and invitation links are stored only as SHA-256 digests; a personal token is shown once, when it is created, and only a short prefix stays visible afterwards. TOTP secrets and the SMTP password must be readable by the server, so they are sealed with AES-256-GCM under `data/secret.key`, a 32-byte key created on first start with owner-only permissions. Back that file up together with the database: losing it makes existing TOTP enrollments and the stored SMTP password unreadable, and they then have to be reset. A database upgraded from an older version is converted on the first start of this release, which is logged once.
+Passwords are bcrypt hashes. Session tokens, personal API tokens and invitation links are stored only as SHA-256 digests; a personal token is shown once, when it is created, and only a short prefix stays visible afterwards. TOTP secrets and the SMTP password must be readable by the server, so they are sealed with AES-256-GCM under `data_dir/secret.key`, a 32-byte key created on first start with owner-only permissions. Back that file up together with the database: losing it makes existing TOTP enrollments and the stored SMTP password unreadable, and they then have to be reset. A database upgraded from an older version is converted on the first start of this release, which is logged once.
 
 ## First run
 
 1. Place the binary for the target machine in its own directory, for example `/opt/together/together-linux-amd64`.
-2. Create `config.ini` next to it. At minimum set `addr`, `data_dir` and, behind HTTPS, `secure_cookies=true`.
+2. Create `config.ini` next to it. Set `addr` for the listener; configure TLS and `secure_cookies=true` as required by the deployment. The default data directory is per-user and does not need to be specified.
 3. Start the binary as an unprivileged user. A minimal systemd unit:
 
    ```ini
@@ -235,7 +235,7 @@ Passwords are bcrypt hashes. Session tokens, personal API tokens and invitation 
 6. Check `GET /api/ready` returns `200` with `{"ok":true,"ready":true}` before sending traffic.
 7. Download a first backup from the admin area and store it outside the server.
 
-On first start the binary creates the data directory, opens `data/app.db`, applies migrations in order and seeds the default workflow states To do, In progress and Done. Each new project receives its own Default workflow and initial state, bound to Observer, Action, Micro and Bug; administrators can add transitions or create a local flow from a kit. The process writes `app.db` and its SQLite WAL sidecars; there are no attachments and no other storage.
+On first start the binary creates the platform-specific user data directory (unless `data_dir`/`DATA_DIR` overrides it), opens `app.db` inside it unless `db_path`/`DB_PATH` is explicitly set, applies migrations in order and seeds the default workflow states To do, In progress and Done. Each new project receives its own Default workflow and initial state, bound to Observer, Action, Micro and Bug; administrators can add transitions or create a local flow from a kit. The process writes `app.db` and its SQLite WAL sidecars; there are no attachments and no other storage.
 
 ## Language and appearance
 
@@ -404,7 +404,7 @@ Important invariants:
 
 - `users.locale` accepts `en`, `it` and `es`; email is unique, case-insensitive.
 - Passwords are bcrypt hashes. `sessions.token_hash`, `api_tokens.token_hash`, `invites.token_hash` and `login_challenges.token_hash` hold SHA-256 digests, never the bearer value. `api_tokens.token_prefix` keeps the first characters for display.
-- `user_totp.secret_enc` and the SMTP password in `config.ini` are AES-256-GCM ciphertext under `data/secret.key`; recovery codes are hashed.
+- `user_totp.secret_enc` and the SMTP password in `config.ini` are AES-256-GCM ciphertext under `data_dir/secret.key`; recovery codes are hashed.
 - Each account keeps at least one active API token; revocation is refused when only one remains.
 - `settings` has one row (`id = 1`) with `setup_completed` and `require_2fa`; each workflow stores its own initial state.
 - Notification deduplication uses partial unique indexes (one unread assignment per user/item, one mention per user/comment, one due summary per user/day).
@@ -433,7 +433,7 @@ Admins download a consistent snapshot from the admin area. The snapshot is produ
 
 For a manual copy, stop the service first, then copy `app.db` (and any remaining `app.db-wal`/`app.db-shm` files) from the configured data directory.
 
-Also keep a copy of `data/secret.key`. It is not inside the database snapshot, and it is the key that opens the sealed TOTP secrets and the stored SMTP password: a backup without it restores the data but loses every second factor and the mail password.
+Also keep a copy of `data_dir/secret.key`. It is not inside the database snapshot, and it is the key that opens the sealed TOTP secrets and the stored SMTP password: a backup without it restores the data but loses every second factor and the mail password.
 
 To restore, stop the service, move the current database files aside, place the snapshot as `app.db` with no sidecars, restore the matching `secret.key`, and start the service. Migrations run automatically if the snapshot is older than the binary. Rebuild the search index from the admin area if the restored file was copied by hand while the service was running.
 
@@ -446,7 +446,7 @@ To restore, stop the service, move the current database files aside, place the s
 
 Migrations apply in version order at startup. A 1.0.0 database upgrades in place through every later migration; a 2.0.0 database applies `0007_locale_es`, `0008_hashed_secrets` and `0009_project_workflows`, keeping every account, reference and pending invitation. The first start after the upgrade rewrites the clear-text tokens, invitation links and TOTP secret into digests or ciphertext and logs how many values it converted; personal tokens and invitation links keep working, because they are matched through their digest from then on. A database created by a newer binary is refused; downgrades require restoring the matching backup.
 
-Back up `data/secret.key` together with the database. A restored snapshot without that key cannot decrypt the TOTP secrets or the SMTP password it contains, so affected accounts need their second factor reset.
+Back up `data_dir/secret.key` together with the database. A restored snapshot without that key cannot decrypt the TOTP secrets or the SMTP password it contains, so affected accounts need their second factor reset.
 
 ## Reverse proxy
 
@@ -500,7 +500,7 @@ Caddy needs no extra directive for event streams. If a proxy cannot carry stream
 - Request logs contain method, redacted path, status, duration and remote IP. Bodies, cookies, authorization headers and invite tokens are never logged, so passwords and personal API tokens cannot leak into a log file.
 - Login attempts are rate-limited per remote IP in process memory.
 - Session cookies are HttpOnly/SameSite=Lax and are marked Secure when TLS is served directly or `secure_cookies=true`. Baseline security headers are set, including a strict Content-Security-Policy that allows no external requests, and `Strict-Transport-Security` whenever the binary serves TLS.
-- Nothing is stored in clear text: passwords are bcrypt, bearer secrets are SHA-256 digests, TOTP secrets and the SMTP password are AES-256-GCM ciphertext under `data/secret.key`, and API responses carry `Cache-Control: no-store`.
+- Nothing is stored in clear text: passwords are bcrypt, bearer secrets are SHA-256 digests, TOTP secrets and the SMTP password are AES-256-GCM ciphertext under `data_dir/secret.key`, and API responses carry `Cache-Control: no-store`.
 - SQLite runs in WAL mode with foreign keys and a busy timeout enabled.
 - The admin area exposes SMTP settings, backup, search-index rebuild and the 2FA policy.
 
@@ -565,7 +565,7 @@ The project uses semantic versioning and keeps a Keep a Changelog style history 
 4. Run `powershell -File scripts/smoke.ps1` against the built binary.
 5. Publish `dist/together-*` and the changelog entry.
 
-Current line: **4.1.0** (2026-11-22) — project-owned workflows, local copies from a standard kit catalog, per-task-type bindings with transactional state mapping, workflow-aware project and cross-project views, and responsive graph containment. 3.0.0 added hashed bearer secrets, sealed TOTP and SMTP values, optional TLS and `0008_hashed_secrets`; 2.1.0 renamed Work to Together and added the Spanish interface, selectable language and light/dark theme.
+Current line: **4.2.0** (2026-11-22) — optional SMTP setup with encrypted password storage and platform-specific user data directory defaults, while retaining operator control over listener, TLS and cookie settings. 4.1.0 added project-owned workflows, local copies from a standard kit catalog, per-task-type bindings with transactional state mapping, workflow-aware project and cross-project views, and responsive graph containment. 3.0.0 added hashed bearer secrets, sealed TOTP and SMTP values, optional TLS and `0008_hashed_secrets`; 2.1.0 renamed Work to Together and added the Spanish interface, selectable language and light/dark theme.
 
 ## Out of scope
 

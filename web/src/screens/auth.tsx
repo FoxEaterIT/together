@@ -52,6 +52,13 @@ export function SetupScreen({ onDone }: { onDone: (user: User) => void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [smtpEnabled, setSmtpEnabled] = useState(false);
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState("587");
+  const [smtpUser, setSmtpUser] = useState("");
+  const [smtpPassword, setSmtpPassword] = useState("");
+  const [smtpFrom, setSmtpFrom] = useState("");
+  const [smtpTLS, setSmtpTLS] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -66,7 +73,10 @@ export function SetupScreen({ onDone }: { onDone: (user: User) => void }) {
     try {
       const user = await api<User>("/api/setup", {
         method: "POST",
-        body: { name: name.trim(), email: email.trim(), password, locale },
+        body: {
+          name: name.trim(), email: email.trim(), password, locale,
+          smtp: smtpEnabled ? { host: smtpHost, port: Number(smtpPort), user: smtpUser, password: smtpPassword || undefined, from: smtpFrom, tls: smtpTLS } : undefined,
+        },
       });
       onDone(user);
     } catch (err) {
@@ -118,6 +128,18 @@ export function SetupScreen({ onDone }: { onDone: (user: User) => void }) {
             onChange={(event) => setPassword(event.target.value)}
           />
         </Field>
+        <details className="setup-optional">
+          <summary>{t("Optional email settings")}</summary>
+          <label className="check-row"><input type="checkbox" checked={smtpEnabled} onChange={(event) => setSmtpEnabled(event.target.checked)} />{t("Configure email (SMTP)")}</label>
+          {smtpEnabled ? <>
+            <Field label={t("SMTP host")} htmlFor="setup-smtp-host" required><Input id="setup-smtp-host" value={smtpHost} onChange={(event) => setSmtpHost(event.target.value)} /></Field>
+            <Field label={t("SMTP port")} htmlFor="setup-smtp-port" required><Input id="setup-smtp-port" type="number" value={smtpPort} onChange={(event) => setSmtpPort(event.target.value)} /></Field>
+            <Field label={t("SMTP username")} htmlFor="setup-smtp-user"><Input id="setup-smtp-user" value={smtpUser} onChange={(event) => setSmtpUser(event.target.value)} /></Field>
+            <Field label={t("SMTP password")} htmlFor="setup-smtp-password"><Input id="setup-smtp-password" type="password" autoComplete="new-password" value={smtpPassword} onChange={(event) => setSmtpPassword(event.target.value)} /></Field>
+            <Field label={t("Sender email")} htmlFor="setup-smtp-from" required><Input id="setup-smtp-from" type="email" value={smtpFrom} onChange={(event) => setSmtpFrom(event.target.value)} /></Field>
+            <label className="check-row"><input type="checkbox" checked={smtpTLS} onChange={(event) => setSmtpTLS(event.target.checked)} />{t("Use TLS")}</label>
+          </> : null}
+        </details>
         <Button type="submit" variant="primary" block disabled={busy} icon={busy ? <Loader2 className="spinner" /> : <ShieldCheck />}>
           {busy ? t("Creating…") : t("Create administrator")}
         </Button>

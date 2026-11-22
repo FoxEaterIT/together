@@ -14,7 +14,7 @@ Working guide for AI agents and contributors. It covers how the project is struc
 | Frontend | React + TypeScript, Vite, lucide-react, fontsource; no runtime external requests |
 | Database | SQLite, WAL, embedded migrations, no ORM |
 | Binary | `cmd/server`, one static binary with the SPA embedded |
-| Current version | 4.1.0 (2026-11-22) |
+| Current version | 4.2.0 (2026-11-22) |
 | Languages | English (source), Italian, Spanish |
 | Themes | light and dark, CSS tokens |
 
@@ -36,7 +36,7 @@ Working guide for AI agents and contributors. It covers how the project is struc
 ```powershell
 # Dependencies and development
 npm install
-go run ./cmd/server            # http://127.0.0.1:8080, data/ created on first run
+go run ./cmd/server            # http://127.0.0.1:8080, per-user data directory created on first run
 npm run dev                    # Vite on :5173, proxies /api to :8080
 
 # Verification
@@ -55,7 +55,7 @@ powershell -File scripts/smoke.ps1 -Binary dist/together-windows-amd64.exe
 powershell -File scripts/make-logo.ps1
 ```
 
-`go run` uses `config.ini` in the working directory; environment variables override it (`ADDR`, `DATA_DIR`, `DB_PATH`, `LOCALE`, `SECURE_COOKIES`, `SMTP_*`). For an isolated experiment, point `DATA_DIR` at a temporary directory.
+`go run` uses `config.ini` in the working directory; environment variables override it (`ADDR`, `DATA_DIR`, `DB_PATH`, `LOCALE`, `SECURE_COOKIES`, `SMTP_*`). With no `data_dir`/`DATA_DIR`, Together stores application data in the platform user data location (`%LOCALAPPDATA%\\Together` on Windows; the user configuration directory's `Together` folder elsewhere). Operators can set `DATA_DIR`/`DB_PATH` for managed deployments or isolated experiments. Address/port, TLS and cookie security remain operator-managed rather than first-run options. The first-run setup can optionally save SMTP settings; passwords must be sealed with `secrets.Box`, and environment-provided settings remain authoritative.
 
 ## Repository map
 
@@ -63,7 +63,7 @@ powershell -File scripts/make-logo.ps1
 cmd/server/            main.go: config -> db.Open -> stores -> httpapi -> serve
 internal/auth/         users, sessions, API tokens, invites, password hashing
 internal/automations/  rule storage/execution, due_passed evaluation
-internal/config/       config.ini + env, validation, atomic write-back
+internal/config/       config.ini + env, platform user-data defaults, validation, atomic write-back
 internal/db/           Open, migrate, seed workflow, VACUUM INTO backup
 internal/db/migrations/NNNN_name.sql (never edit an applied file)
 internal/email/        SMTP with optional STARTTLS
@@ -72,7 +72,7 @@ internal/items/        items, filters, search, comments, history, transitions
 internal/notifications/inbox, dedup, due summary
 internal/projects/     visibility, grants, archive rules
 internal/realtime/     in-process SSE fan-out hub
-internal/secrets/      data/secret.key, AES-256-GCM sealing for recoverable values
+internal/secrets/      data_dir/secret.key, AES-256-GCM sealing for recoverable values
 internal/teams/        groups and membership
 internal/tlsconf/      self-signed certificate generation for tls_auto
 internal/totp/         RFC 6238 + recovery code helpers
@@ -130,7 +130,7 @@ API tokens (`Authorization: Bearer tgr_...`) authenticate the same routes as coo
 ## Data invariants
 
 - **Identity**: email unique and `COLLATE NOCASE`; `users.locale` is `en`, `it` or `es`.
-- **Secrets**: passwords are bcrypt hashes; session tokens, API tokens (bearer) and invitation links are stored only as SHA-256 digests (`*_token_hash`), with `api_tokens.token_prefix` kept purely for display. A bearer value appears in clear text exactly once, in the response that creates it; it is never readable afterwards. Values that must be decrypted (TOTP secret, SMTP password) are sealed with `secrets.Box` (AES-256-GCM under `data/secret.key`); `Seal` refuses with `ErrNoKey` instead of writing plain text.
+- **Secrets**: passwords are bcrypt hashes; session tokens, API tokens (bearer) and invitation links are stored only as SHA-256 digests (`*_token_hash`), with `api_tokens.token_prefix` kept purely for display. A bearer value appears in clear text exactly once, in the response that creates it; it is never readable afterwards. Values that must be decrypted (TOTP secret, SMTP password) are sealed with `secrets.Box` (AES-256-GCM under `data_dir/secret.key`); `Seal` refuses with `ErrNoKey` instead of writing plain text.
 - **At least one token**: creating and revoking tokens enforces one active token per account; the last one cannot be revoked.
 - **Soft deletion**: `archived_at` on projects, teams, items. Archived projects are invisible except to admins/managers who manage them; archived items are hidden from views but kept.
 - **Item hierarchy**: Observer has no parent; Action/Bug may parent to an Observer in the same project; Micro must parent to an Action in the same project; archiving an Action archives its Micros in the same transaction.
@@ -218,7 +218,7 @@ Column renames that change meaning (`token` → `token_hash`, `secret` → `secr
 - **Logging**: `redactPath` hides invite tokens and API paths; extend it rather than logging raw URLs.
 - **CSP**: no inline `<script>`, no external assets, no `eval`. React `style` props are fine; static inline style attributes are not.
 - **The last token**: revocation enforces at least one active token; do not relax that in tests or handlers.
-- **`data/secret.key` is not disposable**: deleting it silently invalidates every sealed value, so TOTP enrollments stop verifying and the stored SMTP password no longer opens. It must be backed up with the database, and tests that exercise 2FA need a key (`testServer` and the e2e helpers create one).
+- **`secret.key` in `data_dir` is not disposable**: deleting it silently invalidates every sealed value, so TOTP enrollments stop verifying and the stored SMTP password no longer opens. It must be backed up with the database, and tests that exercise 2FA need a key (`testServer` and the e2e helpers create one).
 - **Plain HTTP leaks the password**: hashing at rest does not encrypt the transport. The only real fix is TLS (`tls_auto`, `tls_cert`/`tls_key`, or a terminating proxy); do not try to "solve" it by hashing credentials in the browser, because the hash becomes the password.
 - **TLS is opt-in**: configuration must reject half a certificate pair, `tls_auto` combined with `tls_cert`, and a redirect without TLS. With TLS on, the session cookie is `Secure` unconditionally.
 - **Guests**: read-only, never transition, never enroll in 2FA, and expire by date; expiry is computed from `guest_expires_on`, not `disabled_at`.

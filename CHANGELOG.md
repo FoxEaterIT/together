@@ -2,6 +2,20 @@
 
 All notable changes to this project. The format follows Keep a Changelog and the project uses semantic versioning.
 
+## [4.2.0] - 2026-11-22
+
+First-run setup can optionally configure SMTP, with the password sealed before it is saved. The default data directory now lives in the user's platform-specific application data location; host, TLS and cookie settings remain operator-managed.
+
+### Added
+
+- Optional SMTP configuration during initial administrator setup, saved to `config.ini` with the SMTP password encrypted using the installation key.
+
+### Changed
+
+- Default application data directory is now `%LOCALAPPDATA%\\Together` on Windows and the platform user configuration directory's `Together` folder elsewhere. `DATA_DIR` and `DB_PATH` remain available for operator overrides.
+- SMTP settings supplied through environment variables remain authoritative over values entered during first-run setup.
+- Initial administrator locale remains a profile preference and is not written to `config.ini`.
+
 ## [4.1.0] - 2026-11-22
 
 Project workflows are now configurable independently, with reusable task-type bindings, a standard kit catalog and transactional state mapping when a workflow changes. This release also improves workflow-aware item creation, search, reports, automation and project views.
