@@ -97,6 +97,7 @@ type e2eUser struct {
 }
 
 type e2eWorkflow struct {
+	ID     int64 `json:"id"`
 	States []struct {
 		ID       int64  `json:"id"`
 		Name     string `json:"name"`
@@ -188,9 +189,26 @@ func TestEndToEndV1Flow(t *testing.T) {
 		t.Fatalf("setup user: %+v", adminUser)
 	}
 
-	// 3. Define the one global transition used later.
-	var wf e2eWorkflow
-	admin.decode(http.StatusOK, http.MethodGet, "/api/workflow", nil, &wf)
+	// 3. Define a project and its workflow.
+	var project struct {
+		ID         int64  `json:"id"`
+		Visibility string `json:"visibility"`
+	}
+	admin.decode(http.StatusCreated, http.MethodPost, "/api/projects", map[string]any{
+		"name": "E2E Project", "description": "end to end", "visibility": "private",
+	}, &project)
+	if project.ID == 0 {
+		t.Fatalf("project creation: %+v", project)
+	}
+
+	var wfList struct {
+		Workflows []e2eWorkflow `json:"workflows"`
+	}
+	admin.decode(http.StatusOK, http.MethodGet, fmt.Sprintf("/api/projects/%d/workflows", project.ID), nil, &wfList)
+	if len(wfList.Workflows) == 0 {
+		t.Fatal("project has no seeded workflow")
+	}
+	wf := wfList.Workflows[0]
 	var todoID, doneID int64
 	for _, state := range wf.States {
 		switch state.Name {
@@ -206,21 +224,14 @@ func TestEndToEndV1Flow(t *testing.T) {
 	var transition struct {
 		ID int64 `json:"id"`
 	}
-	admin.decode(http.StatusCreated, http.MethodPost, "/api/workflow/transitions", map[string]any{
+	admin.decode(http.StatusCreated, http.MethodPost, fmt.Sprintf("/api/projects/%d/workflows/%d/transitions", project.ID, wf.ID), map[string]any{
 		"from_state_id": todoID, "to_state_id": doneID, "name": "Finish",
 	}, &transition)
 	if transition.ID == 0 {
 		t.Fatal("transition was not created")
 	}
 
-	// 4. Create a private project and invite a member.
-	var project struct {
-		ID         int64  `json:"id"`
-		Visibility string `json:"visibility"`
-	}
-	admin.decode(http.StatusCreated, http.MethodPost, "/api/projects", map[string]any{
-		"name": "E2E Private", "description": "end to end", "visibility": "private",
-	}, &project)
+	// 4. Invite a member and add them to the project.
 	var invite struct {
 		Token string `json:"token"`
 	}

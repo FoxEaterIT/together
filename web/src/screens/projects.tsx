@@ -14,6 +14,7 @@ import { useI18n } from "../i18n";
 import { Link, useParams, useRouter } from "../router";
 import { canCreateProjects, useApp, useLoader } from "../state";
 import type { Person, Project, ProjectMember, ProjectTeamLink, Team } from "../types";
+import { ProjectWorkflowsSection } from "./workflow";
 import {
   Badge,
   Button,
@@ -664,6 +665,8 @@ export function ProjectSettingsScreen() {
           </div>
         )}
       </section>
+
+      <ProjectWorkflowsSection projectID={project.id} />
 
       {!archived ? (
         <section className="section">

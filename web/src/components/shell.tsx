@@ -13,7 +13,6 @@ import {
   SlidersHorizontal,
   UserRound,
   Users,
-  Workflow as WorkflowIcon,
   X,
   Zap,
   BarChart3,
@@ -241,7 +240,6 @@ export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut:
           <div className="nav-group">
             <span className="nav-label">{t("Administration")}</span>
             <NavLink to="/automations" icon={<Zap />} label={t("Automations")} />
-            {isAdmin ? <NavLink to="/workflow" icon={<WorkflowIcon />} label={t("Workflow")} /> : null}
             {isAdmin ? <NavLink to="/admin/backup" icon={<Database />} label={t("Backup")} /> : null}
           </div>
         ) : null}

@@ -4,7 +4,8 @@ import { api, queryString } from "../api";
 import { useI18n } from "../i18n";
 import { Link, useParams } from "../router";
 import { canWrite, useApp, useLoader } from "../state";
-import type { Item, Person, Project, Workflow } from "../types";
+import type { Item, Person, Project, WorkflowList } from "../types";
+import { allStates, stateOptionLabel } from "../workflows";
 import { ItemTable } from "../components/items";
 import {
   Badge,
@@ -31,7 +32,10 @@ export function ProjectScreen() {
   const [assigneeID, setAssigneeID] = useState("");
 
   const projectState = useLoader(() => api<Project>(`/api/projects/${projectID}`), [projectID]);
-  const workflowState = useLoader(() => api<Workflow>("/api/workflow"), []);
+  const workflowState = useLoader(
+    () => api<WorkflowList>(`/api/projects/${projectID}/workflows`),
+    [projectID],
+  );
   const peopleState = useLoader(
     () => api<{ people: Person[] }>(`/api/projects/${projectID}/people`),
     [projectID],
@@ -72,6 +76,8 @@ export function ProjectScreen() {
   const writable = canWrite(user) && !archived;
   const canManage = user.role === "admin" || user.role === "manager";
   const items = itemsState.data?.items ?? [];
+  const workflows = workflowState.data?.workflows ?? [];
+  const states = allStates(workflows);
   const hasFilters = Boolean(query || type || stateID || priority || assigneeID);
 
   return (
@@ -137,9 +143,9 @@ export function ProjectScreen() {
         <Field label={t("State")}>
           <Select value={stateID} onChange={(event) => setStateID(event.target.value)}>
             <option value="">{t("All states")}</option>
-            {(workflowState.data?.states ?? []).map((state) => (
+            {states.map((state) => (
               <option key={state.id} value={state.id}>
-                {state.name}
+                {stateOptionLabel(state, workflows)}
               </option>
             ))}
           </Select>

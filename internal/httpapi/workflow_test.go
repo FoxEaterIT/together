@@ -32,9 +32,19 @@ type workflowTransitionJSON struct {
 }
 
 type workflowJSON struct {
+	ID             int64                    `json:"id"`
+	ProjectID      int64                    `json:"project_id"`
+	Name           string                   `json:"name"`
+	Preset         string                   `json:"preset"`
 	States         []workflowStateJSON      `json:"states"`
 	Transitions    []workflowTransitionJSON `json:"transitions"`
 	InitialStateID int64                    `json:"initial_state_id"`
+	ItemTypes      []string                 `json:"item_types"`
+}
+
+type workflowListJSON struct {
+	Workflows []workflowJSON   `json:"workflows"`
+	Bindings  map[string]int64 `json:"bindings"`
 }
 
 func decodeWorkflow(t *testing.T, body []byte) workflowJSON {
@@ -44,6 +54,15 @@ func decodeWorkflow(t *testing.T, body []byte) workflowJSON {
 		t.Fatalf("decode workflow: %v (%s)", err, string(body))
 	}
 	return wf
+}
+
+func decodeWorkflowList(t *testing.T, body []byte) workflowListJSON {
+	t.Helper()
+	var parsed workflowListJSON
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode workflow list: %v (%s)", err, string(body))
+	}
+	return parsed
 }
 
 func decodeWorkflowState(t *testing.T, body []byte) workflowStateJSON {
@@ -84,6 +103,21 @@ func stateByName(list []workflowStateJSON, name string) workflowStateJSON {
 	return workflowStateJSON{}
 }
 
+// defaultWorkflow reads the workflows of a project and returns the flow every
+// sealed item type is bound to.
+func defaultWorkflow(t *testing.T, s *Server, cookie *http.Cookie, projectID int64) workflowListJSON {
+	t.Helper()
+	w := apiDo(t, s, http.MethodGet, fmt.Sprintf("/api/projects/%d/workflows", projectID), cookie, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("workflow list: %d %s", w.Code, w.Body.String())
+	}
+	list := decodeWorkflowList(t, w.Body.Bytes())
+	if len(list.Workflows) == 0 {
+		t.Fatalf("no workflows seeded for project %d", projectID)
+	}
+	return list
+}
+
 func TestWorkflowAdminCRUDAndConstraints(t *testing.T) {
 	s := testServer(t)
 	admin, _, err := s.auth.Setup("Admin", "admin@example.test", "password-strong")
@@ -98,12 +132,40 @@ func TestWorkflowAdminCRUDAndConstraints(t *testing.T) {
 	memberCookie := login(t, s, member.Email, "password-strong")
 	guestCookie := login(t, s, guest.Email, "password-strong")
 
-	// Everyone authenticated can read the workflow; only the admin can write.
-	w := apiDo(t, s, http.MethodGet, "/api/workflow", memberCookie, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("member workflow read: %d %s", w.Code, w.Body.String())
+	w := apiDo(t, s, http.MethodPost, "/api/projects", adminCookie, `{"name":"Open","visibility":"open"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project: %d %s", w.Code, w.Body.String())
 	}
-	wf := decodeWorkflow(t, w.Body.Bytes())
+	project := decodeProject(t, w)
+
+	// The preset catalog is readable and offers the standard kits.
+	w = apiDo(t, s, http.MethodGet, "/api/workflow/presets", memberCookie, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("presets: %d %s", w.Code, w.Body.String())
+	}
+	var catalog struct {
+		Presets []struct {
+			Slug string `json:"slug"`
+		} `json:"presets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &catalog); err != nil {
+		t.Fatalf("decode presets: %v (%s)", err, w.Body.String())
+	}
+	if len(catalog.Presets) < 5 {
+		t.Fatalf("preset catalog = %+v", catalog.Presets)
+	}
+
+	// Everyone who can see the project reads its flows; only the admin writes.
+	list := defaultWorkflow(t, s, memberCookie, project.ID)
+	if len(list.Bindings) != 4 {
+		t.Fatalf("bindings = %+v", list.Bindings)
+	}
+	wf := list.Workflows[0]
+	for _, itemType := range []string{"observer", "action", "micro", "bug"} {
+		if list.Bindings[itemType] != wf.ID {
+			t.Fatalf("binding %s = %d (want %d)", itemType, list.Bindings[itemType], wf.ID)
+		}
+	}
 	if len(wf.States) != 3 {
 		t.Fatalf("seeded states = %+v", wf.States)
 	}
@@ -116,20 +178,21 @@ func TestWorkflowAdminCRUDAndConstraints(t *testing.T) {
 	if !todo.Initial {
 		t.Fatalf("initial flag missing: %+v", todo)
 	}
-	w = apiDo(t, s, http.MethodGet, "/api/workflow", guestCookie, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("guest workflow read: %d", w.Code)
-	}
+	defaultWorkflow(t, s, guestCookie, project.ID)
 
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/states", managerCookie, `{"name":"Backlog","category":"open"}`)
+	statesURL := fmt.Sprintf("/api/projects/%d/workflows/%d/states", project.ID, wf.ID)
+	transitionsURL := fmt.Sprintf("/api/projects/%d/workflows/%d/transitions", project.ID, wf.ID)
+	initialURL := fmt.Sprintf("/api/projects/%d/workflows/%d/initial-state", project.ID, wf.ID)
+
+	w = apiDo(t, s, http.MethodPost, statesURL, managerCookie, `{"name":"Backlog","category":"open"}`)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("manager state create: expected 403, got %d", w.Code)
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/states", memberCookie, `{"name":"Backlog","category":"open"}`)
+	w = apiDo(t, s, http.MethodPost, statesURL, memberCookie, `{"name":"Backlog","category":"open"}`)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member state create: expected 403, got %d", w.Code)
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/states", adminCookie, `{"name":"Backlog","category":"open"}`)
+	w = apiDo(t, s, http.MethodPost, statesURL, adminCookie, `{"name":"Backlog","category":"open"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("admin state create: %d %s", w.Code, w.Body.String())
 	}
@@ -137,20 +200,20 @@ func TestWorkflowAdminCRUDAndConstraints(t *testing.T) {
 	if backlog.Name != "Backlog" || backlog.Category != "open" {
 		t.Fatalf("created state = %+v", backlog)
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/states", adminCookie, `{"name":"backlog","category":"done"}`)
+	w = apiDo(t, s, http.MethodPost, statesURL, adminCookie, `{"name":"backlog","category":"done"}`)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("duplicate state: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/states", adminCookie, `{"name":"  ","category":"open"}`)
+	w = apiDo(t, s, http.MethodPost, statesURL, adminCookie, `{"name":"  ","category":"open"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("empty state: expected 400, got %d", w.Code)
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/states", adminCookie, `{"name":"Odd","category":"paused"}`)
+	w = apiDo(t, s, http.MethodPost, statesURL, adminCookie, `{"name":"Odd","category":"paused"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("bad category: expected 400, got %d", w.Code)
 	}
 
-	w = apiDo(t, s, http.MethodPut, fmt.Sprintf("/api/workflow/states/%d", backlog.ID), adminCookie, `{"name":"Icebox","position":0}`)
+	w = apiDo(t, s, http.MethodPut, fmt.Sprintf("%s/%d", statesURL, backlog.ID), adminCookie, `{"name":"Icebox","position":0}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("state update: %d %s", w.Code, w.Body.String())
 	}
@@ -158,34 +221,34 @@ func TestWorkflowAdminCRUDAndConstraints(t *testing.T) {
 	if renamed.Name != "Icebox" || renamed.Position != 0 {
 		t.Fatalf("updated state = %+v", renamed)
 	}
-	w = apiDo(t, s, http.MethodPut, fmt.Sprintf("/api/workflow/states/%d", done.ID), adminCookie, `{"category":"open"}`)
+	w = apiDo(t, s, http.MethodPut, fmt.Sprintf("%s/%d", statesURL, done.ID), adminCookie, `{"category":"open"}`)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("last done category: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
 
-	if w = apiDo(t, s, http.MethodPut, "/api/workflow/initial-state", adminCookie, fmt.Sprintf(`{"state_id":%d}`, backlog.ID)); w.Code != http.StatusNoContent {
+	if w = apiDo(t, s, http.MethodPut, initialURL, adminCookie, fmt.Sprintf(`{"state_id":%d}`, backlog.ID)); w.Code != http.StatusNoContent {
 		t.Fatalf("set initial: %d %s", w.Code, w.Body.String())
 	}
-	w = apiDo(t, s, http.MethodGet, "/api/workflow", memberCookie, "")
-	if wf = decodeWorkflow(t, w.Body.Bytes()); wf.InitialStateID != backlog.ID || !stateByName(wf.States, "Icebox").Initial {
-		t.Fatalf("initial not updated: %+v", wf)
+	list = defaultWorkflow(t, s, memberCookie, project.ID)
+	if list.Workflows[0].InitialStateID != backlog.ID || !stateByName(list.Workflows[0].States, "Icebox").Initial {
+		t.Fatalf("initial not updated: %+v", list.Workflows[0])
 	}
-	w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("/api/workflow/states/%d", backlog.ID), adminCookie, "")
+	w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("%s/%d", statesURL, backlog.ID), adminCookie, "")
 	if w.Code != http.StatusConflict {
 		t.Fatalf("delete initial: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
-	if w = apiDo(t, s, http.MethodPut, "/api/workflow/initial-state", adminCookie, fmt.Sprintf(`{"state_id":%d}`, todo.ID)); w.Code != http.StatusNoContent {
+	if w = apiDo(t, s, http.MethodPut, initialURL, adminCookie, fmt.Sprintf(`{"state_id":%d}`, todo.ID)); w.Code != http.StatusNoContent {
 		t.Fatalf("reset initial: %d", w.Code)
 	}
 
 	// Transitions: admin only, unique pair, same-state rejected, invalid
 	// conditions rejected.
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/transitions", managerCookie,
+	w = apiDo(t, s, http.MethodPost, transitionsURL, managerCookie,
 		fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d}`, todo.ID, progress.ID))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("manager transition create: expected 403, got %d", w.Code)
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/transitions", adminCookie,
+	w = apiDo(t, s, http.MethodPost, transitionsURL, adminCookie,
 		fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d,"conditions":[{"kind":"role","value":"admin"}]}`, todo.ID, progress.ID))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("transition create: %d %s", w.Code, w.Body.String())
@@ -194,23 +257,23 @@ func TestWorkflowAdminCRUDAndConstraints(t *testing.T) {
 	if start.Name == "" || start.FromStateID != todo.ID || len(start.Conditions) != 1 {
 		t.Fatalf("created transition = %+v", start)
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/transitions", adminCookie,
+	w = apiDo(t, s, http.MethodPost, transitionsURL, adminCookie,
 		fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d}`, todo.ID, progress.ID))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("duplicate transition: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/transitions", adminCookie,
+	w = apiDo(t, s, http.MethodPost, transitionsURL, adminCookie,
 		fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d}`, todo.ID, todo.ID))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("same-state transition: expected 400, got %d", w.Code)
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/transitions", adminCookie,
+	w = apiDo(t, s, http.MethodPost, transitionsURL, adminCookie,
 		fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d,"conditions":[{"kind":"script","value":"x"}]}`, todo.ID, done.ID))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid condition: expected 400, got %d", w.Code)
 	}
 
-	w = apiDo(t, s, http.MethodPut, fmt.Sprintf("/api/workflow/transitions/%d", start.ID), adminCookie,
+	w = apiDo(t, s, http.MethodPut, fmt.Sprintf("%s/%d", transitionsURL, start.ID), adminCookie,
 		`{"name":"Start work","conditions":[{"kind":"role","value":"manager"},{"kind":"priority","value":"high"}]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("transition update: %d %s", w.Code, w.Body.String())
@@ -220,33 +283,45 @@ func TestWorkflowAdminCRUDAndConstraints(t *testing.T) {
 		t.Fatalf("updated transition = %+v", updated)
 	}
 
-	if w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("/api/workflow/transitions/%d", start.ID), adminCookie, ""); w.Code != http.StatusNoContent {
+	if w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("%s/%d", transitionsURL, start.ID), adminCookie, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("transition delete: %d %s", w.Code, w.Body.String())
 	}
-	if w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("/api/workflow/transitions/%d", start.ID), adminCookie, ""); w.Code != http.StatusNotFound {
+	if w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("%s/%d", transitionsURL, start.ID), adminCookie, ""); w.Code != http.StatusNotFound {
 		t.Fatalf("double transition delete: expected 404, got %d", w.Code)
 	}
 
 	// A state still referenced by an item cannot be deleted.
-	w = apiDo(t, s, http.MethodPost, "/api/projects", adminCookie, `{"name":"Open","visibility":"open"}`)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create project: %d %s", w.Code, w.Body.String())
-	}
-	project := decodeProject(t, w)
 	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/projects/%d/items", project.ID), adminCookie, `{"type":"action","title":"Task"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create item: %d %s", w.Code, w.Body.String())
 	}
-	if w = apiDo(t, s, http.MethodPut, "/api/workflow/initial-state", adminCookie, fmt.Sprintf(`{"state_id":%d}`, progress.ID)); w.Code != http.StatusNoContent {
+	if w = apiDo(t, s, http.MethodPut, initialURL, adminCookie, fmt.Sprintf(`{"state_id":%d}`, progress.ID)); w.Code != http.StatusNoContent {
 		t.Fatalf("initial to progress: %d", w.Code)
 	}
-	w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("/api/workflow/states/%d", todo.ID), adminCookie, "")
+	w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("%s/%d", statesURL, todo.ID), adminCookie, "")
 	if w.Code != http.StatusConflict {
 		t.Fatalf("delete state in use: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
-	w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("/api/workflow/states/%d", backlog.ID), adminCookie, "")
+	w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("%s/%d", statesURL, backlog.ID), adminCookie, "")
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("delete unused state: %d %s", w.Code, w.Body.String())
+	}
+
+	// A flow bound to items cannot be deleted; a duplicate can.
+	w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("/api/projects/%d/workflows/%d", project.ID, wf.ID), adminCookie, "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("delete bound workflow: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/projects/%d/workflows/%d/duplicate", project.ID, wf.ID), adminCookie, `{"name":"Copy"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("duplicate workflow: %d %s", w.Code, w.Body.String())
+	}
+	copied := decodeWorkflow(t, w.Body.Bytes())
+	if copied.Name != "Copy" || len(copied.States) != len(wf.States) {
+		t.Fatalf("copied workflow = %+v", copied)
+	}
+	if w = apiDo(t, s, http.MethodDelete, fmt.Sprintf("/api/projects/%d/workflows/%d", project.ID, copied.ID), adminCookie, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete unbound workflow: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -266,13 +341,21 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 	outsiderCookie := login(t, s, outsider.Email, "password-strong")
 	guestCookie := login(t, s, guest.Email, "password-strong")
 
-	w := apiDo(t, s, http.MethodGet, "/api/workflow", adminCookie, "")
-	wf := decodeWorkflow(t, w.Body.Bytes())
+	w := apiDo(t, s, http.MethodPost, "/api/projects", adminCookie, `{"name":"Open","visibility":"open"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project: %d %s", w.Code, w.Body.String())
+	}
+	open := decodeProject(t, w)
+	list := defaultWorkflow(t, s, adminCookie, open.ID)
+	wf := list.Workflows[0]
 	todo := stateByName(wf.States, "To do")
 	progress := stateByName(wf.States, "In progress")
 	done := stateByName(wf.States, "Done")
 
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/states", adminCookie, `{"name":"Blocked","category":"done"}`)
+	statesURL := fmt.Sprintf("/api/projects/%d/workflows/%d/states", open.ID, wf.ID)
+	transitionsURL := fmt.Sprintf("/api/projects/%d/workflows/%d/transitions", open.ID, wf.ID)
+
+	w = apiDo(t, s, http.MethodPost, statesURL, adminCookie, `{"name":"Blocked","category":"done"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("blocked state: %d %s", w.Code, w.Body.String())
 	}
@@ -282,7 +365,7 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 	// arrow and a typed arrow from In progress.
 	createTransition := func(body string) workflowTransitionJSON {
 		t.Helper()
-		w := apiDo(t, s, http.MethodPost, "/api/workflow/transitions", adminCookie, body)
+		w := apiDo(t, s, http.MethodPost, transitionsURL, adminCookie, body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create transition: %d %s", w.Code, w.Body.String())
 		}
@@ -293,11 +376,6 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 	blockAssigned := createTransition(fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d,"name":"Block","conditions":[{"kind":"assignee","value":"yes"}]}`, todo.ID, blocked.ID))
 	fixBug := createTransition(fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d,"name":"Fix bug","conditions":[{"kind":"priority","value":"urgent"},{"kind":"item_type","value":"bug"}]}`, progress.ID, blocked.ID))
 
-	w = apiDo(t, s, http.MethodPost, "/api/projects", adminCookie, `{"name":"Open","visibility":"open"}`)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create project: %d %s", w.Code, w.Body.String())
-	}
-	open := decodeProject(t, w)
 	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/projects/%d/items", open.ID), adminCookie,
 		fmt.Sprintf(`{"type":"action","title":"Task","priority":"high","assignee_ids":[%d]}`, member.ID))
 	if w.Code != http.StatusCreated {
@@ -310,17 +388,17 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("member transitions: %d %s", w.Code, w.Body.String())
 	}
-	list := decodeItemTransitions(t, w.Body.Bytes())
-	if len(list) != 2 || !hasTransition(list, start.ID) || !hasTransition(list, blockAssigned.ID) {
-		t.Fatalf("member transitions = %+v", list)
+	list2 := decodeItemTransitions(t, w.Body.Bytes())
+	if len(list2) != 2 || !hasTransition(list2, start.ID) || !hasTransition(list2, blockAssigned.ID) {
+		t.Fatalf("member transitions = %+v", list2)
 	}
 	w = apiDo(t, s, http.MethodGet, fmt.Sprintf("/api/items/%d/transitions", task.ID), managerCookie, "")
-	if list = decodeItemTransitions(t, w.Body.Bytes()); len(list) != 1 || !hasTransition(list, start.ID) {
-		t.Fatalf("manager transitions = %+v", list)
+	if list2 = decodeItemTransitions(t, w.Body.Bytes()); len(list2) != 1 || !hasTransition(list2, start.ID) {
+		t.Fatalf("manager transitions = %+v", list2)
 	}
 	w = apiDo(t, s, http.MethodGet, fmt.Sprintf("/api/items/%d/transitions", task.ID), guestCookie, "")
-	if list = decodeItemTransitions(t, w.Body.Bytes()); len(list) != 0 {
-		t.Fatalf("guest transitions = %+v", list)
+	if list2 = decodeItemTransitions(t, w.Body.Bytes()); len(list2) != 0 {
+		t.Fatalf("guest transitions = %+v", list2)
 	}
 
 	// The item detail carries the same available list.
@@ -352,8 +430,8 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 	}
 	// The manager-only arrow is hidden from members and refused.
 	w = apiDo(t, s, http.MethodGet, fmt.Sprintf("/api/items/%d/transitions", task.ID), memberCookie, "")
-	if list = decodeItemTransitions(t, w.Body.Bytes()); len(list) != 0 {
-		t.Fatalf("member transitions after start = %+v", list)
+	if list2 = decodeItemTransitions(t, w.Body.Bytes()); len(list2) != 0 {
+		t.Fatalf("member transitions after start = %+v", list2)
 	}
 	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/items/%d/transitions/%d", task.ID, managerClose.ID), memberCookie, "")
 	if w.Code != http.StatusForbidden {
@@ -388,9 +466,9 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 		t.Fatalf("bug start: %d %s", w.Code, w.Body.String())
 	}
 	w = apiDo(t, s, http.MethodGet, fmt.Sprintf("/api/items/%d/transitions", bug.ID), memberCookie, "")
-	list = decodeItemTransitions(t, w.Body.Bytes())
-	if len(list) != 1 || !hasTransition(list, fixBug.ID) {
-		t.Fatalf("bug transitions = %+v", list)
+	list2 = decodeItemTransitions(t, w.Body.Bytes())
+	if len(list2) != 1 || !hasTransition(list2, fixBug.ID) {
+		t.Fatalf("bug transitions = %+v", list2)
 	}
 	if w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/items/%d/transitions/%d", bug.ID, fixBug.ID), memberCookie, ""); w.Code != http.StatusOK {
 		t.Fatalf("bug fix: %d %s", w.Code, w.Body.String())
@@ -409,8 +487,13 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 		t.Fatalf("slow fix: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Private project: people without access get 404, not 403.
+	// A private project seeds its own independent flow; outsiders cannot read it
+	// or use a transition that belongs to another project.
 	private := createPrivateProject(t, s, managerCookie)
+	w = apiDo(t, s, http.MethodGet, fmt.Sprintf("/api/projects/%d/workflows", private.ID), outsiderCookie, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("outsider workflow list: expected 404, got %d", w.Code)
+	}
 	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/projects/%d/items", private.ID), managerCookie, `{"type":"action","title":"Secret"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("private item: %d %s", w.Code, w.Body.String())
@@ -423,6 +506,12 @@ func TestItemTransitionsConditionsAndAccess(t *testing.T) {
 	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/items/%d/transitions/%d", secret.ID, start.ID), outsiderCookie, "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("outsider apply: expected 404, got %d", w.Code)
+	}
+	// Even an insider of the private project cannot apply an arrow of another
+	// project's flow.
+	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/items/%d/transitions/%d", secret.ID, start.ID), managerCookie, "")
+	if w.Code == http.StatusOK {
+		t.Fatalf("cross-project transition accepted")
 	}
 
 	// Archived items disappear from the transition API too.

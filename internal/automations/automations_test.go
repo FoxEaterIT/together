@@ -49,7 +49,11 @@ func setup(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	stateIDs := map[string]int64{}
-	rows, err := conn.Query(`SELECT id, name FROM workflow_states`)
+	rows, err := conn.Query(`
+		SELECT ws.id, ws.name
+		FROM workflow_states ws
+		JOIN workflows wf ON wf.id = ws.workflow_id
+		WHERE wf.project_id = ?`, project.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,6 +290,16 @@ func TestMatchingTriggerProjectAndState(t *testing.T) {
 	got, err = f.store.Matching(automations.Event{Kind: "state_changed", ProjectID: f.projectID, StateID: f.progressID})
 	if err != nil || len(got) != 0 {
 		t.Fatalf("wrong state = %+v %v", got, err)
+	}
+	// A rule written before flows became per project stores a state id from
+	// another copy; the equivalent state is matched by name.
+	got, err = f.store.Matching(automations.Event{Kind: "state_changed", ProjectID: f.project2ID, StateID: 999999, StateName: "Done"})
+	if err != nil || len(got) != 1 || got[0].ID != global.ID {
+		t.Fatalf("name fallback = %+v %v", got, err)
+	}
+	got, err = f.store.Matching(automations.Event{Kind: "state_changed", ProjectID: f.project2ID, StateID: 999999, StateName: "In progress"})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("name mismatch = %+v %v", got, err)
 	}
 
 	got, err = f.store.Matching(automations.Event{Kind: "assigned", ProjectID: f.projectID})

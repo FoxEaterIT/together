@@ -214,11 +214,8 @@ func TestRoleAccessMatrixV1(t *testing.T) {
 	// The guest can read the private project through the team and still cannot
 	// transition; the member can.
 	var wf workflowJSON
-	w = apiDo(t, s, http.MethodGet, "/api/workflow", adminCookie, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("workflow: %d", w.Code)
-	}
-	wf = decodeWorkflow(t, w.Body.Bytes())
+	list := defaultWorkflow(t, s, adminCookie, privateProject.ID)
+	wf = list.Workflows[0]
 	var todoID, doneID int64
 	for _, state := range wf.States {
 		switch state.Name {
@@ -228,7 +225,7 @@ func TestRoleAccessMatrixV1(t *testing.T) {
 			doneID = state.ID
 		}
 	}
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/transitions", adminCookie,
+	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/projects/%d/workflows/%d/transitions", privateProject.ID, wf.ID), adminCookie,
 		fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d,"name":"Finish"}`, todoID, doneID))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create transition: %d %s", w.Code, w.Body.String())
@@ -271,6 +268,7 @@ func TestRoleAccessMatrixV1(t *testing.T) {
 	}
 
 	// Role-gated routes: the answer is 403, not a hidden button.
+	openWorkflow := defaultWorkflow(t, s, adminCookie, openProject.ID).Workflows[0]
 	roleCases := []struct {
 		method string
 		path   string
@@ -280,7 +278,7 @@ func TestRoleAccessMatrixV1(t *testing.T) {
 		{http.MethodPost, "/api/projects", `{"name":"Role case","visibility":"open"}`, map[string]int{"admin": 201, "manager": 201, "member": 403, "guest": 403}},
 		{http.MethodGet, "/api/users", "", map[string]int{"admin": 200, "manager": 403, "member": 403, "guest": 403}},
 		{http.MethodGet, "/api/automations", "", map[string]int{"admin": 200, "manager": 200, "member": 403, "guest": 403}},
-		{http.MethodPost, "/api/workflow/states", `{"name":"Blocked","category":"open"}`, map[string]int{"admin": 201, "manager": 403, "member": 403, "guest": 403}},
+		{http.MethodPost, fmt.Sprintf("/api/projects/%d/workflows/%d/states", openProject.ID, openWorkflow.ID), `{"name":"Blocked","category":"open"}`, map[string]int{"admin": 201, "manager": 403, "member": 403, "guest": 403}},
 		{http.MethodGet, "/api/admin/backup", "", map[string]int{"admin": 200, "manager": 403, "member": 403, "guest": 403}},
 	}
 	cookies := map[string]*http.Cookie{"admin": adminCookie, "manager": managerCookie, "member": memberCookie, "guest": guestCookie}

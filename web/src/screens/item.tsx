@@ -24,9 +24,10 @@ import type {
   Person,
   Priority,
   Project,
-  Workflow,
+  WorkflowList,
 } from "../types";
 import { itemHref, PriorityBadge, StateBadge, TypeIcon, TypeTag, DueLabel } from "../components/items";
+import { boundWorkflow, initialState } from "../workflows";
 import {
   Avatar,
   Badge,
@@ -217,7 +218,10 @@ export function NewItemScreen() {
   const [busy, setBusy] = useState(false);
 
   const projectState = useLoader(() => api<Project>(`/api/projects/${projectID}`), [projectID]);
-  const workflowState = useLoader(() => api<Workflow>("/api/workflow"), []);
+  const workflowState = useLoader(
+    () => api<WorkflowList>(`/api/projects/${projectID}/workflows`),
+    [projectID],
+  );
   const peopleState = useLoader(
     () => api<{ people: Person[] }>(`/api/projects/${projectID}/people`),
     [projectID],
@@ -227,7 +231,11 @@ export function NewItemScreen() {
     [projectID],
   );
 
-  const initial = workflowState.data?.states.find((state) => state.id === workflowState.data?.initial_state_id);
+  const initial = initialState(
+    workflowState.data?.workflows ?? [],
+    workflowState.data?.bindings ?? {},
+    type,
+  );
 
   if (projectState.loading) {
     return <Loading />;
@@ -373,9 +381,14 @@ export function ItemDetailScreen() {
   const detailState = useLoader(() => api<ItemDetail>(`/api/items/${itemID}`), [itemID]);
   const commentsState = useLoader(() => api<{ comments: Comment[] }>(`/api/items/${itemID}/comments`), [itemID]);
   const eventsState = useLoader(() => api<{ events: ItemEvent[] }>(`/api/items/${itemID}/events`), [itemID]);
-  const workflowState = useLoader(() => api<Workflow>("/api/workflow"), []);
-
   const detail = detailState.data;
+  const workflowState = useLoader(
+    () =>
+      detail?.item.project_id
+        ? api<WorkflowList>(`/api/projects/${detail.item.project_id}/workflows`)
+        : Promise.resolve({ workflows: [], bindings: {} }),
+    [detail?.item.project_id],
+  );
   const projectID = detail?.item.project_id;
   const peopleState = useLoader(
     () =>
@@ -577,7 +590,12 @@ export function ItemDetailScreen() {
     }
   }
 
-  const states = workflowState.data?.states ?? [];
+  const flow = boundWorkflow(
+    workflowState.data?.workflows ?? [],
+    workflowState.data?.bindings ?? {},
+    item.type,
+  );
+  const states = flow?.states ?? [];
 
   return (
     <>

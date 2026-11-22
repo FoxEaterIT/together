@@ -30,7 +30,6 @@ import { ProjectScreen } from "./screens/project";
 import { ItemDetailScreen, NewItemScreen } from "./screens/item";
 import { InvitationsScreen, PeopleScreen } from "./screens/people";
 import { TeamScreen, TeamsScreen } from "./screens/teams";
-import { WorkflowScreen } from "./screens/workflow";
 import { AutomationsScreen } from "./screens/automations";
 import { NotificationsScreen } from "./screens/notifications";
 import { ReportsScreen } from "./screens/reports";
@@ -297,9 +296,6 @@ function RouteContent({ path, user }: { path: string; user: User }) {
   if (path === "/teams") {
     return <TeamsScreen />;
   }
-  if (path === "/workflow") {
-    return <WorkflowScreen />;
-  }
   if (path === "/automations") {
     return <AutomationsScreen />;
   }
@@ -351,7 +347,6 @@ function isAdminOnly(path: string) {
     path === "/people/invites" ||
     path === "/teams" ||
     path.startsWith("/teams/") ||
-    path === "/workflow" ||
     path === "/admin/backup"
   );
 }

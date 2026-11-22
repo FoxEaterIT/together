@@ -4,7 +4,7 @@ import { api, queryString } from "../api";
 import { useI18n } from "../i18n";
 import { useRouter, useQueryState } from "../router";
 import { useLoader } from "../state";
-import type { Item, Person, Workflow } from "../types";
+import type { Item, Person, WorkflowStateRef } from "../types";
 import { ItemTable } from "../components/items";
 import { Button, EmptyState, ErrorState, Field, Input, Loading, PageHead, Select } from "../components/ui";
 import { addDaysISO, todayISO } from "./my-work";
@@ -56,7 +56,16 @@ export function SearchScreen() {
   const sort = params.get("sort") ?? "";
 
   const peopleState = useLoader(() => api<{ people: Person[] }>("/api/people"), []);
-  const workflowState = useLoader(() => api<Workflow>("/api/workflow"), []);
+  const workflowState = useLoader(() => api<{ states: WorkflowStateRef[] }>("/api/workflow/states"), []);
+  const stateGroups = useMemo(() => {
+    const groups = new Map<number, { projectName: string; states: WorkflowStateRef[] }>();
+    for (const state of workflowState.data?.states ?? []) {
+      const group = groups.get(state.project_id) ?? { projectName: state.project_name, states: [] };
+      group.states.push(state);
+      groups.set(state.project_id, group);
+    }
+    return Array.from(groups.entries()).sort((a, b) => a[1].projectName.localeCompare(b[1].projectName));
+  }, [workflowState.data]);
 
   const search = useMemo(() => {
     const today = todayISO();
@@ -237,10 +246,14 @@ export function SearchScreen() {
         <Field label={t("State")}>
           <Select value={stateID} onChange={(event) => update({ state_id: event.target.value })}>
             <option value="">{t("All states")}</option>
-            {(workflowState.data?.states ?? []).map((state) => (
-              <option key={state.id} value={state.id}>
-                {state.name}
-              </option>
+            {stateGroups.map(([projectID, group]) => (
+              <optgroup key={projectID} label={group.projectName}>
+                {group.states.map((state) => (
+                  <option key={state.id} value={state.id}>
+                    {state.name} · {state.workflow_name}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </Select>
         </Field>

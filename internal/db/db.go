@@ -1,6 +1,7 @@
-// Package db opens SQLite, applies the embedded migrations in version order,
-// seeds the default workflow and produces consistent backups. Schema changes
-// live only in internal/db/migrations; application code never alters tables.
+// Package db opens SQLite, applies the embedded migrations in version order
+// and produces consistent backups. A project owns its workflows, so no
+// installation-wide workflow is seeded here. Schema changes live only in
+// internal/db/migrations; application code never alters tables.
 package db
 
 import (
@@ -36,10 +37,6 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 	if err := migrate(conn); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := seedWorkflow(conn); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -157,48 +154,6 @@ func checkForeignKeys(conn *sql.DB) error {
 		return fmt.Errorf("foreign key check reported a violation after migration")
 	}
 	return rows.Err()
-}
-
-func seedWorkflow(conn *sql.DB) error {
-	var count int
-	if err := conn.QueryRow(`SELECT COUNT(*) FROM workflow_states`).Scan(&count); err != nil {
-		return fmt.Errorf("count states: %w", err)
-	}
-	if count > 0 {
-		return nil
-	}
-	tx, err := conn.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	type seed struct {
-		name     string
-		category string
-	}
-	states := []seed{{"To do", "open"}, {"In progress", "open"}, {"Done", "done"}}
-	var firstID int64
-	for i, state := range states {
-		res, err := tx.Exec(
-			`INSERT INTO workflow_states (name, category, position, created_at) VALUES (?, ?, ?, ?)`,
-			state.name, state.category, i, now(),
-		)
-		if err != nil {
-			return fmt.Errorf("seed state %s: %w", state.name, err)
-		}
-		id, err := res.LastInsertId()
-		if err != nil {
-			return err
-		}
-		if i == 0 {
-			firstID = id
-		}
-	}
-	if _, err := tx.Exec(`UPDATE settings SET initial_state_id = ? WHERE id = 1`, firstID); err != nil {
-		return fmt.Errorf("set initial state: %w", err)
-	}
-	return tx.Commit()
 }
 
 func versionOf(name string) (int, error) {

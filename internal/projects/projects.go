@@ -6,8 +6,11 @@ package projects
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+
+	"jiralike/internal/workflow"
 )
 
 var (
@@ -117,6 +120,11 @@ func (s *Store) Create(name, description, visibility string, createdBy int64) (P
 		id, createdBy, now,
 	); err != nil {
 		return Project{}, err
+	}
+	// Every project starts with its own copy of the default flow, bound to the
+	// four item types. Items always have a workflow to start from.
+	if err := workflow.SeedDefault(tx, id); err != nil {
+		return Project{}, fmt.Errorf("seed project workflow: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return Project{}, err

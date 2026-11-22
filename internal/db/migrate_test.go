@@ -10,6 +10,7 @@ import (
 
 	"jiralike/internal/auth"
 	"jiralike/internal/secrets"
+	"jiralike/internal/workflow"
 )
 
 func openForMigration(t *testing.T, path string) *sql.DB {
@@ -26,7 +27,8 @@ func openForMigration(t *testing.T, path string) *sql.DB {
 }
 
 // TestOpenMigratesEmptyDatabase checks the first start: every migration is
-// recorded once, the workflow is seeded and settings point at an initial state.
+// recorded once and no workflow is seeded, because a flow belongs to a project
+// and a fresh installation has none.
 func TestOpenMigratesEmptyDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.db")
 	conn, err := Open(path)
@@ -48,26 +50,29 @@ func TestOpenMigratesEmptyDatabase(t *testing.T) {
 		versions = append(versions, version)
 	}
 	rows.Close()
-	if len(versions) != 8 || versions[0] != 1 || versions[7] != 8 {
+	if len(versions) != 9 || versions[0] != 1 || versions[8] != 9 {
 		t.Fatalf("migration versions: %v", versions)
 	}
 
-	var states int
+	var states, workflows int
 	if err := conn.QueryRow(`SELECT COUNT(*) FROM workflow_states`).Scan(&states); err != nil {
 		t.Fatal(err)
 	}
-	if states != 3 {
-		t.Fatalf("seeded states: %d", states)
-	}
-	var initial sql.NullInt64
-	if err := conn.QueryRow(`SELECT initial_state_id FROM settings WHERE id = 1`).Scan(&initial); err != nil {
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM workflows`).Scan(&workflows); err != nil {
 		t.Fatal(err)
 	}
-	if !initial.Valid {
-		t.Fatal("initial state not set after seeding")
+	if states != 0 || workflows != 0 {
+		t.Fatalf("seeded workflows: %d flows, %d states", workflows, states)
+	}
+	var initialColumns int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('settings') WHERE name = 'initial_state_id'`).Scan(&initialColumns); err != nil {
+		t.Fatal(err)
+	}
+	if initialColumns != 0 {
+		t.Fatal("settings.initial_state_id survived 0009")
 	}
 
-	// Reopening must not duplicate seed rows or reapply migrations.
+	// Reopening must not duplicate rows or reapply migrations.
 	conn.Close()
 	again, err := Open(path)
 	if err != nil {
@@ -77,7 +82,7 @@ func TestOpenMigratesEmptyDatabase(t *testing.T) {
 	if err := again.QueryRow(`SELECT COUNT(*) FROM workflow_states`).Scan(&states); err != nil {
 		t.Fatal(err)
 	}
-	if states != 3 {
+	if states != 0 {
 		t.Fatalf("states after reopen: %d", states)
 	}
 }
@@ -224,8 +229,37 @@ func TestOpenUpgradesVersionOneWithData(t *testing.T) {
 	if err := upgraded.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&versions); err != nil {
 		t.Fatal(err)
 	}
-	if versions != 8 {
+	if versions != 9 {
 		t.Fatalf("migration rows after upgrade: %d", versions)
+	}
+
+	// 0009 copies the legacy flow into every project and binds all four item
+	// types, then moves existing items onto the copy.
+	var workflowID, workflowProjectID int64
+	if err := upgraded.QueryRow(`SELECT id, project_id FROM workflows WHERE project_id = 7`).Scan(&workflowID, &workflowProjectID); err != nil {
+		t.Fatalf("0009 workflow missing: %v", err)
+	}
+	if workflowProjectID != 7 {
+		t.Fatalf("0009 workflow project = %d", workflowProjectID)
+	}
+	var stateID int64
+	if err := upgraded.QueryRow(`SELECT ws.id FROM items i JOIN workflow_states ws ON ws.id = i.state_id WHERE i.id = 9 AND ws.workflow_id = ?`, workflowID).Scan(&stateID); err != nil {
+		t.Fatalf("0009 did not remap the item: %v", err)
+	}
+	if stateID == 0 {
+		t.Fatal("0009 remapped the item to state 0")
+	}
+	var legacyStates int
+	if err := upgraded.QueryRow(`SELECT COUNT(*) FROM workflow_states WHERE workflow_id = ?`, workflowID).Scan(&legacyStates); err != nil || legacyStates != 2 {
+		t.Fatalf("0009 states = %d (%v)", legacyStates, err)
+	}
+	var bindings int
+	if err := upgraded.QueryRow(`SELECT COUNT(*) FROM project_workflows WHERE project_id = 7 AND workflow_id = ?`, workflowID).Scan(&bindings); err != nil || bindings != 4 {
+		t.Fatalf("0009 bindings = %d (%v)", bindings, err)
+	}
+	var initial int
+	if err := upgraded.QueryRow(`SELECT COUNT(*) FROM workflow_states WHERE workflow_id = ? AND is_initial = 1`, workflowID).Scan(&initial); err != nil || initial != 1 {
+		t.Fatalf("0009 initial states = %d (%v)", initial, err)
 	}
 }
 
@@ -290,7 +324,7 @@ func TestOpenUpgradesVersionFiveWithData(t *testing.T) {
 		t.Fatalf("user_totp after upgrade: %d %v", totpRows, err)
 	}
 	var maxVersion int
-	if err := upgraded.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 8 {
+	if err := upgraded.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 9 {
 		t.Fatalf("schema version after upgrade: %d %v", maxVersion, err)
 	}
 }
@@ -375,7 +409,7 @@ func TestOpenUpgradesVersionFourWithData(t *testing.T) {
 		t.Fatalf("notification lost after upgrade: %d %v", notifications, err)
 	}
 	var maxVersion int
-	if err := upgraded.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 8 {
+	if err := upgraded.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 9 {
 		t.Fatalf("schema version after upgrade: %d %v", maxVersion, err)
 	}
 	var require2FA int
@@ -410,20 +444,34 @@ func TestBackupPreservesSearchAndTwoFactor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stateID int64
-	if err := source.QueryRow(`SELECT initial_state_id FROM settings WHERE id = 1`).Scan(&stateID); err != nil {
-		t.Fatal(err)
-	}
-	res, err = source.Exec(`INSERT INTO projects (name, visibility, created_by, created_at) VALUES ('Backup', 'open', ?, '2026-01-01T00:00:00Z')`, userID)
+	tx, err := source.Begin()
 	if err != nil {
 		t.Fatal(err)
+	}
+	res, err = tx.Exec(`INSERT INTO projects (name, visibility, created_by, created_at) VALUES ('Backup', 'open', ?, '2026-01-01T00:00:00Z')`, userID)
+	if err != nil {
+		t.Fatalf("insert project: %v", err)
 	}
 	projectID, _ := res.LastInsertId()
-	res, err = source.Exec(`INSERT INTO items (project_id, type, title, state_id, created_by, created_at, updated_at) VALUES (?, 'action', 'Restore target', ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, projectID, stateID, userID)
+	if err := workflow.SeedDefault(tx, projectID); err != nil {
+		t.Fatalf("seed workflow: %v", err)
+	}
+	var stateID int64
+	if err := tx.QueryRow(`
+		SELECT ws.id
+		FROM project_workflows pw
+		JOIN workflow_states ws ON ws.workflow_id = pw.workflow_id AND ws.is_initial = 1
+		WHERE pw.project_id = ? AND pw.item_type = 'action'`, projectID).Scan(&stateID); err != nil {
+		t.Fatalf("initial state: %v", err)
+	}
+	res, err = tx.Exec(`INSERT INTO items (project_id, type, title, state_id, created_by, created_at, updated_at) VALUES (?, 'action', 'Restore target', ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, projectID, stateID, userID)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("insert item: %v", err)
 	}
 	itemID, _ := res.LastInsertId()
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := source.Exec(`INSERT INTO comments (item_id, author_id, body, created_at) VALUES (?, ?, 'The restoreneedle lives in this comment', '2026-01-01T00:00:00Z')`, itemID, userID); err != nil {
 		t.Fatal(err)
 	}

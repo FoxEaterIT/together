@@ -66,6 +66,17 @@ func TestSearchQueryPlanUsesFTS(t *testing.T) {
 	if _, err := conn.Exec(`INSERT INTO projects (id, name, visibility, created_by, created_at) VALUES (1, 'P', 'open', 1, ?)`, stamp); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := conn.Exec(`INSERT INTO workflows (id, project_id, name, preset, created_at) VALUES (1, 1, 'Default', 'default', ?)`, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO workflow_states (id, workflow_id, name, category, position, is_initial, created_at) VALUES (1, 1, 'To do', 'open', 0, 1, ?)`, stamp); err != nil {
+		t.Fatal(err)
+	}
+	for _, itemType := range []string{"observer", "action", "micro", "bug"} {
+		if _, err := conn.Exec(`INSERT INTO project_workflows (project_id, item_type, workflow_id) VALUES (1, ?, 1)`, itemType); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := conn.Exec(`INSERT INTO items (id, project_id, type, title, state_id, created_by, created_at, updated_at) VALUES (1, 1, 'action', 'Needle', 1, 1, ?, ?)`, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}

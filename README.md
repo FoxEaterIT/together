@@ -2,7 +2,7 @@
 
 Together is a self-hosted project and work management app for one team or organization. One Go binary serves the JSON API and the compiled React interface; SQLite is embedded, so there is no database server, no message queue and no cloud dependency. The interface ships in English, Italian and Spanish, with a light and a dark theme that can be switched at any time.
 
-It is deliberately small: no marketplace, no plugins, no per-project workflow builder. One installation has one workflow, one set of people and one source of truth.
+It is deliberately small: no marketplace or plugins. Each project owns independent copies of its workflows, while the installation has one set of people and one source of truth.
 
 ## Contents
 
@@ -38,7 +38,7 @@ It is deliberately small: no marketplace, no plugins, no per-project workflow bu
 - **The API is the product contract.** Screens call `/api/...`; nothing reads the database from the browser.
 - **Nothing is hard-deleted.** Projects, teams and items are archived with `archived_at`; history is append-only. A backup is a complete copy of the state.
 - **No external requests at runtime.** Fonts, icons and the logo are served by the binary. SMTP is the only optional outbound integration.
-- **One workflow per installation.** States and transitions are global; projects only grant access to work.
+- **Project-owned workflows.** Each project can own multiple independent flows and bind one to each task type. Standard kits are copied locally; changes never affect another project.
 
 ## Feature tour
 
@@ -235,7 +235,7 @@ Passwords are bcrypt hashes. Session tokens, personal API tokens and invitation 
 6. Check `GET /api/ready` returns `200` with `{"ok":true,"ready":true}` before sending traffic.
 7. Download a first backup from the admin area and store it outside the server.
 
-On first start the binary creates the data directory, opens `data/app.db`, applies migrations in order and seeds the states To do, In progress and Done, with To do as the initial state. Transitions start empty and are defined by an admin. The process writes `app.db` and its SQLite WAL sidecars; there are no attachments and no other storage.
+On first start the binary creates the data directory, opens `data/app.db`, applies migrations in order and seeds the default workflow states To do, In progress and Done. Each new project receives its own Default workflow and initial state, bound to Observer, Action, Micro and Bug; administrators can add transitions or create a local flow from a kit. The process writes `app.db` and its SQLite WAL sidecars; there are no attachments and no other storage.
 
 ## Language and appearance
 
@@ -269,13 +269,15 @@ Rules enforced by the server:
 
 ## Workflow
 
-One workflow is shared by every project and every item type.
+Each project owns one or more workflows. A workflow can be reused by several task types within that project; projects cannot share mutable flow records. The kit catalog (Project Manager, Development, Design, Customer Service and Sales, with lightweight variants) creates a local copy that can be edited independently.
 
 - States have a name, a category (`open` or `done`), a position and one initial state. At least one open and one done state must remain.
 - Transitions are unique arrows from one state to another, with a label and optional conditions.
 - Conditions are simple data, not scripts: `role` (admin, manager, member), `assignee` (yes), `priority`, `item_type`. Conditions of the same kind are ORed; different kinds are ANDed. No conditions means anyone who can write may use the arrow.
 - Guests never transition. A transition applies only when the arrow exists from the current state and all conditions hold; state change, history event, transition actions and automation rules happen atomically.
-- Admins configure states, transitions, conditions and the initial state; the editor draws states as draggable nodes and transitions as arrows. Members see only the transitions available to them on an item.
+- Administrators configure workflows in project settings. Reassigning a task type that has items requires a complete state mapping; all affected items move transactionally and receive history events. Changes stay within that project and do not affect other projects.
+- State selectors spanning projects use each project's state catalog. Automation rules retain state-name matching so existing rules keep working when project-owned copies are introduced.
+- Workflow editing is available from project settings. The canvas keeps wide diagrams inside its own scrollable area so a large flow does not widen the entire page, including on narrow screens.
 
 ## Automations
 
@@ -363,7 +365,8 @@ Endpoint groups:
 | Teams | `GET/POST /api/teams`, `DELETE /api/teams/{id}`, `/api/teams/{id}/members*` |
 | Projects | `GET/POST /api/projects`, `GET/PUT/DELETE /api/projects/{id}`, `/members*`, `/teams*`, `GET /api/projects/{id}/people` |
 | Items | `GET /api/items`, `POST /api/projects/{id}/items`, `GET/PUT/DELETE /api/items/{id}`, `/comments*`, `/events`, `/transitions*` |
-| Workflow | `GET /api/workflow`, `POST/PUT/DELETE /api/workflow/states*`, `PUT /api/workflow/initial-state`, `POST/PUT/DELETE /api/workflow/transitions*` |
+| Workflow catalog | `GET /api/workflow/presets`, `GET /api/workflow/states` |
+| Project workflows | `GET/POST /api/projects/{id}/workflows`, `PUT/DELETE /api/projects/{id}/workflows/{workflow}`, `POST /api/projects/{id}/workflows/{workflow}/duplicate`, `PUT /api/projects/{id}/item-types/{type}/workflow`; state, initial-state and transition operations are nested under `/api/projects/{id}/workflows/{workflow}` |
 | Notifications | `GET /api/notifications`, `/unread-count`, `/stream`, `POST /api/notifications/read-all`, `/api/notifications/{id}/read` |
 | Reports | `GET /api/reports` |
 | Automations | `GET/POST /api/automations`, `GET/PUT/DELETE /api/automations/{id}` |
@@ -390,7 +393,7 @@ Tables, by area:
 | Identity | `users`, `sessions`, `api_tokens`, `invites` |
 | Access | `teams`, `team_members`, `project_members`, `project_teams` |
 | Work | `projects`, `items`, `item_assignees`, `comments`, `comment_mentions`, `item_events` |
-| Workflow | `workflow_states`, `workflow_transitions`, `transition_conditions`, `settings` |
+| Workflow | `workflows`, `project_workflows`, `workflow_states`, `workflow_transitions`, `transition_conditions` |
 | Automation | `automation_rules`, `automation_rule_projects`, `automation_actions`, `automation_rule_runs` |
 | Notifications | `notifications` |
 | Search | `items_fts` (FTS5) |
@@ -403,7 +406,7 @@ Important invariants:
 - Passwords are bcrypt hashes. `sessions.token_hash`, `api_tokens.token_hash`, `invites.token_hash` and `login_challenges.token_hash` hold SHA-256 digests, never the bearer value. `api_tokens.token_prefix` keeps the first characters for display.
 - `user_totp.secret_enc` and the SMTP password in `config.ini` are AES-256-GCM ciphertext under `data/secret.key`; recovery codes are hashed.
 - Each account keeps at least one active API token; revocation is refused when only one remains.
-- `settings` has one row (`id = 1`) with the initial state, `setup_completed` and `require_2fa`.
+- `settings` has one row (`id = 1`) with `setup_completed` and `require_2fa`; each workflow stores its own initial state.
 - Notification deduplication uses partial unique indexes (one unread assignment per user/item, one mention per user/comment, one due summary per user/day).
 - The FTS index is kept current by triggers on items and comments; the migration backfills existing rows.
 - Auth acceptance, item creation, Action archive cascade, transitions and comment edits are the writes that span multiple tables in one transaction.
@@ -420,6 +423,7 @@ Migrations:
 | `0006_totp` | 2FA tables and `settings.require_2fa`. |
 | `0007_locale_es` | Rebuilds `users` so the locale check accepts `es`, preserving rows and references. |
 | `0008_hashed_secrets` | Renames the bearer columns to `*_token_hash` (`api_tokens`, `invites`), adds `api_tokens.token_prefix`, and renames the TOTP column to `secret_enc`. Existing values are converted by the startup backfill. |
+| `0009_project_workflows` | Converts the installation workflow into project-owned flows, binds a flow to each task type, and moves initial-state configuration into workflow states. |
 
 The migration runner disables foreign-key enforcement only while pending migrations are being applied, because SQLite cannot alter a `CHECK` constraint or rebuild a referenced table otherwise. It re-enables enforcement and runs `PRAGMA foreign_key_check` before returning; a failed check aborts startup.
 
@@ -440,7 +444,7 @@ To restore, stop the service, move the current database files aside, place the s
 3. Replace the binary.
 4. Start the service and wait for readiness.
 
-Migrations apply in version order at startup. A 1.0.0 database upgrades in place through every later migration; a 2.0.0 database applies `0007_locale_es` and `0008_hashed_secrets`, keeping every account, reference and pending invitation. The first start after the upgrade rewrites the clear-text tokens, invitation links and TOTP secret into digests or ciphertext and logs how many values it converted; personal tokens and invitation links keep working, because they are matched through their digest from then on. A database created by a newer binary is refused; downgrades require restoring the matching backup.
+Migrations apply in version order at startup. A 1.0.0 database upgrades in place through every later migration; a 2.0.0 database applies `0007_locale_es`, `0008_hashed_secrets` and `0009_project_workflows`, keeping every account, reference and pending invitation. The first start after the upgrade rewrites the clear-text tokens, invitation links and TOTP secret into digests or ciphertext and logs how many values it converted; personal tokens and invitation links keep working, because they are matched through their digest from then on. A database created by a newer binary is refused; downgrades require restoring the matching backup.
 
 Back up `data/secret.key` together with the database. A restored snapshot without that key cannot decrypt the TOTP secrets or the SMTP password it contains, so affected accounts need their second factor reset.
 
@@ -520,7 +524,7 @@ internal/
   tlsconf/             Self-signed certificate generation
   totp/                RFC 6238 verifier and recovery codes
   web/                 Embedded frontend (generated dist)
-  workflow/            States, transitions, conditions, initial state
+  workflow/            Project-owned flows, presets, states, transitions and conditions
 web/                   React + TypeScript source, styles and public assets
   src/components/      Shell, UI primitives, item widgets, 2FA
   src/screens/         One file per screen
@@ -561,8 +565,8 @@ The project uses semantic versioning and keeps a Keep a Changelog style history 
 4. Run `powershell -File scripts/smoke.ps1` against the built binary.
 5. Publish `dist/together-*` and the changelog entry.
 
-Current line: **3.0.0** (2026-11-15) — no clear-text secrets at rest and optional TLS inside the binary: hashed bearer secrets, sealed TOTP and SMTP values, `tls_auto`/`tls_cert` HTTPS and the `0008_hashed_secrets` migration. The 2.1.0 release renamed Work to Together and added the Spanish interface, selectable language and light/dark theme; 2.0.0 added real-time notifications, full-text search and two-factor authentication.
+Current line: **4.1.0** (2026-11-22) — project-owned workflows, local copies from a standard kit catalog, per-task-type bindings with transactional state mapping, workflow-aware project and cross-project views, and responsive graph containment. 3.0.0 added hashed bearer secrets, sealed TOTP and SMTP values, optional TLS and `0008_hashed_secrets`; 2.1.0 renamed Work to Together and added the Spanish interface, selectable language and light/dark theme.
 
 ## Out of scope
 
-Marketplace, plugins, a desktop app, a wiki, collaborative documents, attachments, kanban boards, per-project workflows, custom fields, labels, time tracking and dependencies are deliberately out of scope. The installation stays a single binary with a single workflow and a single database.
+Marketplace, plugins, a desktop app, a wiki, collaborative documents, attachments, kanban boards, custom fields, labels, time tracking and dependencies are deliberately out of scope. The installation stays a single binary and a single database.

@@ -14,7 +14,7 @@ Working guide for AI agents and contributors. It covers how the project is struc
 | Frontend | React + TypeScript, Vite, lucide-react, fontsource; no runtime external requests |
 | Database | SQLite, WAL, embedded migrations, no ORM |
 | Binary | `cmd/server`, one static binary with the SPA embedded |
-| Current version | 3.0.0 (2026-11-15) |
+| Current version | 4.1.0 (2026-11-22) |
 | Languages | English (source), Italian, Spanish |
 | Themes | light and dark, CSS tokens |
 
@@ -77,7 +77,7 @@ internal/teams/        groups and membership
 internal/tlsconf/      self-signed certificate generation for tls_auto
 internal/totp/         RFC 6238 + recovery code helpers
 internal/web/          embeds dist/ (generated; never edit by hand)
-internal/workflow/     states, transitions, conditions, initial state
+internal/workflow/     project-owned flows, presets, states, transitions and conditions
 web/src/               React source
 web/src/components/    shell, UI primitives, item widgets, 2FA screens
 web/src/screens/       one file per screen
@@ -91,7 +91,9 @@ Key files:
 
 - `internal/httpapi/httpapi.go` — route table, auth/role/CSRF middleware, request helpers, SPA fallback.
 - `internal/httpapi/notifications.go` — inbox, SSE handler, due digest scheduler.
-- `internal/db/db.go` — `Open`, `migrate`, `seedWorkflow`, foreign-key handling.
+- `internal/db/db.go` — `Open`, `migrate`, project workflow seeding, foreign-key handling.
+- `internal/workflow/workflow.go` — project-owned flows, task-type bindings, state transitions, mapping and workflow conditions.
+- `internal/workflow/presets.go` — standard workflow kit catalog copied into projects.
 - `internal/auth/auth.go` — `Setup`, `Login`, sessions, hashed tokens, invites, `SealLegacy` backfill.
 - `internal/secrets/secrets.go` — installation key and AES-256-GCM `Seal`/`Open`.
 - `internal/tlsconf/tlsconf.go` — self-signed certificate generation and rotation.
@@ -108,7 +110,7 @@ Generated or ignored: `node_modules/`, `internal/web/dist/`, `dist/`, `data/`, `
 
 ### Startup and shutdown
 
-`cmd/server/main.go` loads config, opens SQLite (`db.Open` applies migrations and seeds the default workflow when empty), loads the installation key (`secrets.LoadOrCreate`), resolves the TLS certificate pair, constructs the domain stores and `httpapi.NewWithOptions`, backfills legacy clear-text secrets (`SealLegacy`), starts the due-digest scheduler and listens. With `tls_auto` or `tls_cert`/`tls_key` it serves HTTPS through `ServeTLS`; the optional `tls_redirect` listener answers plain HTTP with a permanent redirect. On `SIGINT`/`SIGTERM` it closes notification streams first, then drains HTTP for up to 15 seconds, stops the scheduler and closes the database. The same `serve` path is covered by tests.
+`cmd/server/main.go` loads config, opens SQLite (`db.Open` applies migrations and seeds the default workflow when empty; project creation seeds a local Default flow), loads the installation key (`secrets.LoadOrCreate`), resolves the TLS certificate pair, constructs the domain stores and `httpapi.NewWithOptions`, backfills legacy clear-text secrets (`SealLegacy`), starts the due-digest scheduler and listens. With `tls_auto` or `tls_cert`/`tls_key` it serves HTTPS through `ServeTLS`; the optional `tls_redirect` listener answers plain HTTP with a permanent redirect. On `SIGINT`/`SIGTERM` it closes notification streams first, then drains HTTP for up to 15 seconds, stops the scheduler and closes the database. The same `serve` path is covered by tests.
 
 ### Request lifecycle
 
@@ -133,7 +135,7 @@ API tokens (`Authorization: Bearer tgr_...`) authenticate the same routes as coo
 - **Soft deletion**: `archived_at` on projects, teams, items. Archived projects are invisible except to admins/managers who manage them; archived items are hidden from views but kept.
 - **Item hierarchy**: Observer has no parent; Action/Bug may parent to an Observer in the same project; Micro must parent to an Action in the same project; archiving an Action archives its Micros in the same transaction.
 - **History**: `item_events` is append-only; assignee changes store ordered ids; history is never edited or deleted.
-- **Workflow**: one initial state in `settings`; at least one open and one done state; transitions unique from/to; conditions are OR within a kind and AND across kinds; guests never transition.
+- **Workflow**: each project owns its flows and binds them to task types; each flow has exactly one initial state and at least one open and one done state; transitions are unique from/to; conditions are OR within a kind and AND across kinds; guests never transition. Changing a type's flow when items exist requires explicit state mapping and writes item history transactionally. Presets are copied into a project, never shared mutable templates.
 - **Automations**: a rule with no project rows is global; actions run in `position` order in the triggering transaction and never re-enter the engine; `due_passed` uses an idempotent run marker.
 - **Notifications**: deduplicated by partial unique indexes; `emailed_at` is set only after SMTP accepts the message; badge counts ignore unreadable items.
 - **Search**: `items_fts` is kept current by triggers; migrations backfill; queries are parsed, never passed through as FTS syntax; visibility is joined in SQL.
@@ -159,6 +161,7 @@ API tokens (`Authorization: Bearer tgr_...`) authenticate the same routes as coo
 - Screens are function components in `web/src/screens`, shared widgets in `web/src/components`, API calls through `api<T>()`.
 - Every request needs loading, empty and error states. Use `errorMessage()` for display and the toast provider for confirmations.
 - Routing is the small history router in `web/src/router.tsx`. Add a route in `app.tsx`; deep links work because the Go server falls back to `index.html` for non-API paths.
+- Workflow screens use project-scoped `/api/projects/{id}/workflows` data and the shared helpers in `web/src/workflows.ts` to resolve the flow, initial state and available transitions for each task type. Keep project-wide filters and automation selectors backed by the cross-project workflow-state endpoint.
 - Shared state is deliberately small: current user, project cache, unread count. Do not add a global store for screen-local data.
 - **i18n**: call `t("English text")`; placeholders look like `{count}` and are passed as the second argument. Add the same key to the Italian and Spanish dictionaries with identical spelling; duplicate English keys are bugs. Format dates with `formatDate`, `formatDateTime` and `formatRelative`, never with raw `toLocaleString`.
 - **Theme**: use CSS variables from `tokens.css`; if a rule uses a literal colour, add a `[data-theme="dark"]` override in `styles.css`. Verify both themes.

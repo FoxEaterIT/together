@@ -28,6 +28,7 @@ var (
 	ErrChildrenRequireAction = errors.New("items with micro children must stay actions")
 	ErrStateNotFound         = errors.New("state not found")
 	ErrStateConflict         = errors.New("item is no longer in the expected state")
+	ErrNoWorkflow            = errors.New("no workflow is assigned to this item type")
 	ErrDueInvalid            = errors.New("due_on must be a date in YYYY-MM-DD form")
 	ErrAssigneeNotFound      = errors.New("assignee not found")
 	ErrCommentNotFound       = errors.New("comment not found")
@@ -226,11 +227,18 @@ func (s *Store) Create(in CreateInput) (Item, error) {
 	}
 	stateID := in.StateID
 	if stateID == 0 {
-		if err := tx.QueryRow(`SELECT COALESCE(initial_state_id, 0) FROM settings WHERE id = 1`).Scan(&stateID); err != nil {
+		err := tx.QueryRow(`
+			SELECT ws.id
+			FROM project_workflows pw
+			JOIN workflow_states ws ON ws.workflow_id = pw.workflow_id AND ws.is_initial = 1
+			WHERE pw.project_id = ? AND pw.item_type = ?`, in.ProjectID, typ).Scan(&stateID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Item{}, ErrNoWorkflow
+		}
+		if err != nil {
 			return Item{}, err
 		}
-	}
-	if err := ensureState(tx, stateID); err != nil {
+	} else if err := ensureStateInFlow(tx, stateID, in.ProjectID, typ); err != nil {
 		return Item{}, err
 	}
 	assignees, err := normalizeUsers(tx, in.AssigneeIDs, ErrAssigneeNotFound)
@@ -889,6 +897,16 @@ func (s *Store) changeState(id, fromStateID, stateID, actorID int64) error {
 	if err := ensureState(tx, stateID); err != nil {
 		return err
 	}
+	var currentWorkflow, targetWorkflow int64
+	if err := tx.QueryRow(`SELECT workflow_id FROM workflow_states WHERE id = ?`, current.StateID).Scan(&currentWorkflow); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(`SELECT workflow_id FROM workflow_states WHERE id = ?`, stateID).Scan(&targetWorkflow); err != nil {
+		return err
+	}
+	if currentWorkflow != targetWorkflow {
+		return ErrStateNotFound
+	}
 	if current.StateID == stateID {
 		return tx.Commit()
 	}
@@ -981,19 +999,20 @@ func (s *Store) ApplyActions(itemID, actorID int64, actions []Action, marker *Ru
 	for _, action := range actions {
 		switch strings.TrimSpace(action.Kind) {
 		case "set_state":
-			if err := ensureState(tx, action.StateID); err != nil {
+			targetID, err := resolveActionState(tx, current.StateID, action.StateID)
+			if err != nil {
 				return ActionResult{}, err
 			}
-			if current.StateID == action.StateID {
+			if current.StateID == targetID {
 				continue
 			}
-			if _, err := tx.Exec(`UPDATE items SET state_id = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`, action.StateID, now, itemID); err != nil {
+			if _, err := tx.Exec(`UPDATE items SET state_id = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`, targetID, now, itemID); err != nil {
 				return ActionResult{}, err
 			}
-			if err := insertEvent(tx, itemID, actorID, "state_changed", "state", strconv.FormatInt(current.StateID, 10), strconv.FormatInt(action.StateID, 10), now); err != nil {
+			if err := insertEvent(tx, itemID, actorID, "state_changed", "state", strconv.FormatInt(current.StateID, 10), strconv.FormatInt(targetID, 10), now); err != nil {
 				return ActionResult{}, err
 			}
-			current.StateID = action.StateID
+			current.StateID = targetID
 			result.StateChanged = true
 		case "assign_user":
 			if action.UserID <= 0 {
@@ -1553,6 +1572,62 @@ func ensureState(q queryer, stateID int64) error {
 		return ErrStateNotFound
 	}
 	return nil
+}
+
+// ensureStateInFlow rejects a state that belongs to a different project or to a
+// flow not assigned to the item type.
+func ensureStateInFlow(q queryer, stateID, projectID int64, itemType string) error {
+	var count int
+	if err := q.QueryRow(`
+		SELECT COUNT(*)
+		FROM workflow_states ws
+		JOIN project_workflows pw ON pw.workflow_id = ws.workflow_id
+		WHERE ws.id = ? AND pw.project_id = ? AND pw.item_type = ?`,
+		stateID, projectID, itemType,
+	).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrStateNotFound
+	}
+	return nil
+}
+
+// resolveActionState returns the state an automation should move the item to.
+// Automation rules can predate a per-project copy, so a state that belongs to
+// another flow is resolved by name inside the item's workflow. A target that
+// cannot be resolved is an error, never a silent no-op.
+func resolveActionState(q queryer, currentStateID, actionStateID int64) (int64, error) {
+	var currentWorkflow int64
+	var actionWorkflow int64
+	if err := q.QueryRow(
+		`SELECT workflow_id FROM workflow_states WHERE id = ?`, currentStateID,
+	).Scan(&currentWorkflow); err != nil {
+		return 0, err
+	}
+	if err := q.QueryRow(
+		`SELECT workflow_id FROM workflow_states WHERE id = ?`, actionStateID,
+	).Scan(&actionWorkflow); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrStateNotFound
+		}
+		return 0, err
+	}
+	if currentWorkflow == actionWorkflow {
+		return actionStateID, nil
+	}
+	var byName int64
+	err := q.QueryRow(`
+		SELECT target.id
+		FROM workflow_states target
+		WHERE target.workflow_id = ?
+		  AND target.name = (SELECT name FROM workflow_states WHERE id = ?)`,
+		currentWorkflow, actionStateID,
+	).Scan(&byName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrStateNotFound
+	}
+	return byName, err
 }
 
 func normalizeUsers(q queryer, ids []int64, missing error) ([]int64, error) {

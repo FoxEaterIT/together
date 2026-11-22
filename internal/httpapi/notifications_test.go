@@ -467,8 +467,8 @@ func TestDueDigestSchedulerAndEmail(t *testing.T) {
 	create("Overdue", "2026-11-01")
 	done := create("Done but late", "2026-11-02")
 	archived := create("Archived", "2026-11-03")
-	w = apiDo(t, s, http.MethodGet, "/api/workflow", adminCookie, "")
-	states := decodeWorkflow(t, w.Body.Bytes()).States
+	w = apiDo(t, s, http.MethodGet, fmt.Sprintf("/api/projects/%d/workflows", project.ID), adminCookie, "")
+	states := decodeWorkflowList(t, w.Body.Bytes()).Workflows[0].States
 	var doneID int64
 	for _, st := range states {
 		if st.Name == "Done" {

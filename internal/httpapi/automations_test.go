@@ -62,15 +62,11 @@ func decodeComments(t *testing.T, body []byte) []commentJSON {
 	return parsed.Comments
 }
 
-func stateIDs(t *testing.T, s *Server, cookie *http.Cookie) map[string]int64 {
+func stateIDs(t *testing.T, s *Server, cookie *http.Cookie, projectID int64) map[string]int64 {
 	t.Helper()
-	w := apiDo(t, s, http.MethodGet, "/api/workflow", cookie, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("workflow: %d %s", w.Code, w.Body.String())
-	}
-	wf := decodeWorkflow(t, w.Body.Bytes())
+	list := defaultWorkflow(t, s, cookie, projectID)
 	out := map[string]int64{}
-	for _, state := range wf.States {
+	for _, state := range list.Workflows[0].States {
 		out[state.Name] = state.ID
 	}
 	return out
@@ -199,10 +195,11 @@ func TestAutomationStateChangeActionsAndAntiLoop(t *testing.T) {
 		t.Fatalf("project: %d %s", w.Code, w.Body.String())
 	}
 	project := decodeProject(t, w)
-	states := stateIDs(t, s, adminCookie)
+	states := stateIDs(t, s, adminCookie, project.ID)
 	todo, progress, done := states["To do"], states["In progress"], states["Done"]
 
-	w = apiDo(t, s, http.MethodPost, "/api/workflow/transitions", adminCookie,
+	list := defaultWorkflow(t, s, adminCookie, project.ID)
+	w = apiDo(t, s, http.MethodPost, fmt.Sprintf("/api/projects/%d/workflows/%d/transitions", project.ID, list.Workflows[0].ID), adminCookie,
 		fmt.Sprintf(`{"from_state_id":%d,"to_state_id":%d,"name":"Finish"}`, todo, done))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("transition: %d %s", w.Code, w.Body.String())

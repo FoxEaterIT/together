@@ -114,6 +114,7 @@ export type WorkflowCondition = {
 
 export type WorkflowState = {
   id: number;
+  workflow_id: number;
   name: string;
   category: StateCategory;
   position: number;
@@ -125,6 +126,7 @@ export type WorkflowState = {
 
 export type WorkflowTransition = {
   id: number;
+  workflow_id: number;
   from_state_id: number;
   from_state_name: string;
   to_state_id: number;
@@ -135,9 +137,39 @@ export type WorkflowTransition = {
 };
 
 export type Workflow = {
+  id: number;
+  project_id: number;
+  name: string;
+  preset: string;
+  created_at: string;
   states: WorkflowState[];
   transitions: WorkflowTransition[];
   initial_state_id: number;
+  item_types: string[];
+};
+
+export type WorkflowList = {
+  workflows: Workflow[];
+  bindings: Record<string, number>;
+};
+
+export type WorkflowStateRef = {
+  id: number;
+  name: string;
+  category: StateCategory;
+  workflow_id: number;
+  workflow_name: string;
+  project_id: number;
+  project_name: string;
+};
+
+export type WorkflowPreset = {
+  slug: string;
+  name: string;
+  team_kind: string;
+  description: string;
+  states: { key: string; name: string; category: StateCategory }[];
+  transitions: { from: string; to: string; name: string; conditions?: WorkflowCondition[] }[];
 };
 
 export type ItemDetail = {

@@ -4,7 +4,7 @@ import { api } from "../api";
 import { useI18n } from "../i18n";
 import { Link } from "../router";
 import { useApp, useLoader } from "../state";
-import type { Item, Workflow } from "../types";
+import type { Item, WorkflowStateRef } from "../types";
 import { ItemTable } from "../components/items";
 import {
   Button,
@@ -23,7 +23,7 @@ export function MyWorkScreen() {
   const { t } = useI18n();
   const { user, projects } = useApp();
   const [query, setQuery] = useState("");
-  const [stateID, setStateID] = useState("all");
+  const [stateName, setStateName] = useState("all");
   const [priority, setPriority] = useState("all");
   const [projectID, setProjectID] = useState("all");
   const [due, setDue] = useState<DueBucket>("all");
@@ -32,7 +32,14 @@ export function MyWorkScreen() {
     () => api<{ items: Item[] }>("/api/items?assignee_id=me&limit=500"),
     [user.id],
   );
-  const workflowState = useLoader(() => api<Workflow>("/api/workflow"), []);
+  const workflowState = useLoader(() => api<{ states: WorkflowStateRef[] }>("/api/workflow/states"), []);
+  const stateNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const state of workflowState.data?.states ?? []) {
+      names.add(state.name);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [workflowState.data]);
 
   const all = itemsState.data?.items ?? [];
 
@@ -44,7 +51,7 @@ export function MyWorkScreen() {
       if (text && !`${item.title} ${item.description} ${item.project_name}`.toLowerCase().includes(text)) {
         return false;
       }
-      if (stateID !== "all" && String(item.state_id) !== stateID) {
+      if (stateName !== "all" && item.state_name !== stateName) {
         return false;
       }
       if (priority !== "all" && item.priority !== priority) {
@@ -66,7 +73,7 @@ export function MyWorkScreen() {
           return true;
       }
     });
-  }, [all, query, stateID, priority, projectID, due]);
+  }, [all, query, stateName, priority, projectID, due]);
 
   const open = all.filter((item) => item.state_category === "open");
   const overdue = open.filter((item) => item.due_on && item.due_on < todayISO());
@@ -74,11 +81,11 @@ export function MyWorkScreen() {
     (item) => item.due_on && item.due_on >= todayISO() && item.due_on <= addDaysISO(todayISO(), 7),
   );
 
-  const hasFilters = query !== "" || stateID !== "all" || priority !== "all" || projectID !== "all" || due !== "all";
+  const hasFilters = query !== "" || stateName !== "all" || priority !== "all" || projectID !== "all" || due !== "all";
 
   function clearFilters() {
     setQuery("");
-    setStateID("all");
+    setStateName("all");
     setPriority("all");
     setProjectID("all");
     setDue("all");
@@ -129,11 +136,11 @@ export function MyWorkScreen() {
           </div>
         </Field>
         <Field label={t("State")}>
-          <Select value={stateID} onChange={(event) => setStateID(event.target.value)}>
+          <Select value={stateName} onChange={(event) => setStateName(event.target.value)}>
             <option value="all">{t("All states")}</option>
-            {(workflowState.data?.states ?? []).map((state) => (
-              <option key={state.id} value={state.id}>
-                {state.name}
+            {stateNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
               </option>
             ))}
           </Select>

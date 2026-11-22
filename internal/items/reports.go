@@ -6,10 +6,12 @@ import (
 	"time"
 )
 
-// StateCount is one workflow state with the number of visible, active items in
-// it. States with no items are included so the report mirrors the workflow.
+// StateCount is one workflow state name and category with the number of
+// visible, active items in it. Flows are owned by projects, so the same state
+// name can exist in many of them: the report groups by name and category, which
+// keeps one "Done" row instead of one per project copy. States with no items are
+// included so the report mirrors the workflows in use.
 type StateCount struct {
-	StateID       int64  `json:"state_id"`
 	StateName     string `json:"state_name"`
 	StateCategory string `json:"state_category"`
 	Count         int    `json:"count"`
@@ -53,20 +55,22 @@ func (s *Store) Report(viewerID int64, role string, projectID int64) (Report, er
 	}
 	join, joinArgs = withProjectVisibility(join, joinArgs, role, viewerID)
 
-	stateQuery := `SELECT ws.id, ws.name, ws.category, COUNT(i.id)
+	stateQuery := `SELECT ws.name, ws.category, COUNT(i.id)
 		FROM workflow_states ws
-		LEFT JOIN items i ON i.state_id = ws.id
-			AND i.archived_at IS NULL
-			AND EXISTS (SELECT 1 FROM projects p WHERE p.id = i.project_id AND ` + strings.Join(join, " AND ") + `)
-		GROUP BY ws.id, ws.name, ws.category, ws.position
-		ORDER BY ws.position ASC, ws.id ASC`
+		JOIN workflows wf ON wf.id = ws.workflow_id
+		JOIN projects p ON p.id = wf.project_id
+		LEFT JOIN items i ON i.state_id = ws.id AND i.archived_at IS NULL
+		WHERE ` + strings.Join(join, " AND ") + `
+		  AND EXISTS (SELECT 1 FROM project_workflows pw WHERE pw.workflow_id = ws.workflow_id)
+		GROUP BY ws.name, ws.category
+		ORDER BY MIN(ws.position) ASC, ws.name COLLATE NOCASE ASC`
 	stateRows, err := s.db.Query(stateQuery, joinArgs...)
 	if err != nil {
 		return Report{}, err
 	}
 	for stateRows.Next() {
 		var entry StateCount
-		if err := stateRows.Scan(&entry.StateID, &entry.StateName, &entry.StateCategory, &entry.Count); err != nil {
+		if err := stateRows.Scan(&entry.StateName, &entry.StateCategory, &entry.Count); err != nil {
 			stateRows.Close()
 			return Report{}, err
 		}

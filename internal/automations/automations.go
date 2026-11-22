@@ -97,13 +97,16 @@ type RuleInput struct {
 	Actions        []ActionInput
 }
 
-// Event is what the HTTP handlers hand to the engine. StateID is the arrival
-// state for state_changed and is ignored for the other triggers.
+// Event is what the HTTP handlers hand to the engine. StateID and StateName
+// describe the arrival state for state_changed and are ignored for the other
+// triggers. The name lets a rule written before workflows became per project
+// keep firing on the equivalent state of a project's own flow.
 type Event struct {
 	Kind      string
 	ProjectID int64
 	ItemID    int64
 	StateID   int64
+	StateName string
 	Day       string
 }
 
@@ -187,12 +190,11 @@ func (s *Store) Matching(event Event) ([]Rule, error) {
 		FROM automation_rules r
 		WHERE r.enabled = 1
 		  AND r.trigger_kind = ?
-		  AND (r.trigger_kind <> 'state_changed' OR r.trigger_value = '' OR r.trigger_value = ?)
 		  AND (
 			NOT EXISTS (SELECT 1 FROM automation_rule_projects rp WHERE rp.rule_id = r.id)
 			OR EXISTS (SELECT 1 FROM automation_rule_projects rp WHERE rp.rule_id = r.id AND rp.project_id = ?)
 		  )
-		ORDER BY r.id`, event.Kind, strconv.FormatInt(event.StateID, 10), event.ProjectID)
+		ORDER BY r.id`, event.Kind, event.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +218,31 @@ func (s *Store) Matching(event Event) ([]Rule, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return s.hydrate(rules, ids)
+	rules, err = s.hydrate(rules, ids)
+	if err != nil {
+		return nil, err
+	}
+	if event.Kind != "state_changed" {
+		return rules, nil
+	}
+	matched := make([]Rule, 0, len(rules))
+	for _, rule := range rules {
+		// An empty trigger value means "any state change".
+		if rule.TriggerValue == "" {
+			matched = append(matched, rule)
+			continue
+		}
+		if rule.TriggerStateID == event.StateID {
+			matched = append(matched, rule)
+			continue
+		}
+		// The stored id belongs to another project's copy of the flow: fall
+		// back to the state name, which is what survives a per-project clone.
+		if event.StateName != "" && rule.TriggerStateName == event.StateName {
+			matched = append(matched, rule)
+		}
+	}
+	return matched, nil
 }
 
 // DueItems returns open, non-archived items whose due date passed before the

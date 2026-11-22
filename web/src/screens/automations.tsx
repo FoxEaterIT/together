@@ -12,7 +12,7 @@ import {
 import { api, errorMessage } from "../api";
 import { useI18n } from "../i18n";
 import { useApp, useLoader } from "../state";
-import type { AutomationAction, AutomationRule, Person, Project, Workflow } from "../types";
+import type { AutomationAction, AutomationRule, Person, Project, WorkflowStateRef } from "../types";
 import {
   Badge,
   Button,
@@ -78,7 +78,7 @@ export function AutomationsScreen() {
   const { user, projects } = useApp();
   const { notify } = useToast();
   const state = useLoader(() => api<{ automations: AutomationRule[] }>("/api/automations"), []);
-  const workflowState = useLoader(() => api<Workflow>("/api/workflow"), []);
+  const workflowState = useLoader(() => api<{ states: WorkflowStateRef[] }>("/api/workflow/states"), []);
   const peopleState = useLoader(() => api<{ people: Person[] }>("/api/people"), []);
 
   const [open, setOpen] = useState(false);
@@ -399,7 +399,7 @@ export function AutomationsScreen() {
                   <option value="">{t("No state selected")}</option>
                   {states.map((entry) => (
                     <option key={entry.id} value={entry.id}>
-                      {entry.name}
+                      {entry.name} · {entry.project_name}
                     </option>
                   ))}
                 </Select>

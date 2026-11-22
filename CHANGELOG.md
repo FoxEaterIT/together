@@ -2,6 +2,45 @@
 
 All notable changes to this project. The format follows Keep a Changelog and the project uses semantic versioning.
 
+## [4.1.0] - 2026-11-22
+
+Project workflows are now configurable independently, with reusable task-type bindings, a standard kit catalog and transactional state mapping when a workflow changes. This release also improves workflow-aware item creation, search, reports, automation and project views.
+
+### Added
+
+- Project workflow catalogs with multiple local flows, duplication, rename, and standard kits for Project Management, Development, Design, Customer Service and Sales teams, including lightweight variants.
+- Per-task-type workflow assignment. Reassigning a type with existing items requires complete state mapping; affected items, history events and automation effects are handled transactionally.
+- Workflow editor in project settings, with state and transition management, conditions, an initial state per flow, and a visual transition graph.
+- Project-wide workflow state listing for filters, search and automation configuration across separate project workflows.
+
+### Changed
+
+- New projects receive a local Default flow, initially bound to Observer, Action, Micro and Bug.
+- Item creation, state transitions, search, reports, project views and automation triggers resolve states in the relevant project's workflow.
+- Automation state triggers also resolve by state name so project-local copies do not invalidate existing rules.
+- The workflow API is project-scoped. Existing single-workflow installations are converted automatically by migration `0009_project_workflows`.
+
+### Breaking
+
+- Workflow API operations now use project-nested `/api/projects/{id}/workflows/...` routes. `GET /api/workflow/presets` and `GET /api/workflow/states` provide the kit catalog and cross-project state listing.
+- `settings.initial_state_id` has been removed; initial states are configured per workflow.
+
+### Added
+
+- Project workflow catalogs with multiple local flows, duplication, rename, and a standard kit catalog for Project Management, Development, Design, Customer Service and Sales teams.
+- Per-task-type flow assignment. Reassigning a type with existing items requires complete state mapping; item state changes and history events are written transactionally.
+- Workflow editor in project settings; project-wide state listing supports filters, search and automation configuration across separate project workflows.
+
+### Changed
+
+- Creating a project seeds a local Default flow and binds it to Observer, Action, Micro and Bug.
+- Automations resolve state triggers by name as well as identifier so project-local copies do not invalidate existing rules.
+
+### Breaking
+
+- Workflow API operations now use project-nested `/api/projects/{id}/workflows/...` routes. `GET /api/workflow/presets` and `GET /api/workflow/states` provide the kit catalog and cross-project state listing.
+- `settings.initial_state_id` has been removed; initial states are configured per workflow.
+
 ## [3.0.0] - 2026-11-15
 
 Security release: secrets are no longer stored or served in clear text, and the binary can terminate HTTPS itself. The one breaking change is that a personal API token is no longer readable after creation; existing tokens keep working.
